@@ -76,11 +76,19 @@ const App: React.FC = () => {
       setSlots(data.slots || []);
       setInterviewers(data.interviewers || []);
       
-      // Sanitizing notes data - ensure color is valid NoteColor
-      const validNotes = (data.notes || []).map((n: any) => ({
-         ...n,
-         color: (['yellow', 'blue', 'green', 'red', 'purple'].includes(n.color) ? n.color : 'yellow') as NoteColor
-      }));
+      // Sanitizing notes data - use explicit check to fix TS2322
+      const rawNotes = data.notes || [];
+      const validNotes: DayNote[] = rawNotes.map((n: any) => {
+        const colorInput = String(n.color || 'yellow');
+        const validColors = ['yellow', 'blue', 'green', 'red', 'purple'];
+        const finalColor = (validColors.includes(colorInput) ? colorInput : 'yellow') as NoteColor;
+        
+        return {
+          date: String(n.date),
+          content: String(n.content),
+          color: finalColor
+        };
+      });
       setDayNotes(validNotes);
       
       // Keep existing selection if possible, or initialize
@@ -266,7 +274,10 @@ const App: React.FC = () => {
 
   const handleSaveNote = (date: string, content: string, color: NoteColor = 'yellow') => {
     const nextNotes = dayNotes.filter(n => n.date !== date);
-    if (content.trim()) nextNotes.push({ date, content, color });
+    if (content.trim()) {
+      const newNote: DayNote = { date, content, color: color as NoteColor };
+      nextNotes.push(newNote);
+    }
     updateData(slots, interviewers, nextNotes);
   };
 
@@ -355,39 +366,78 @@ const App: React.FC = () => {
   const handleExportPDF = () => {
     if (!calendarRef.current) return;
     const originalElement = calendarRef.current;
+    
+    // Create a deep clone to modify for printing without affecting the UI
     const clone = originalElement.cloneNode(true) as HTMLElement;
-    clone.style.width = '1100px'; 
+    
+    // Apply specific print styles to the clone
+    clone.style.width = '1200px'; // Wide enough for A4 Landscape
     clone.style.height = 'auto'; 
     clone.style.maxHeight = 'none';
     clone.style.overflow = 'visible';
     clone.style.background = 'white';
-    clone.style.padding = '20px';
+    clone.style.padding = '10px';
+    
+    // Remove the navigation buttons (Previous, Today, Next) from the clone
+    const navButtons = clone.querySelector('.no-print');
+    if (navButtons) navButtons.remove();
+
+    // Adjust the main grid container
+    const gridContainer = clone.querySelector('.bg-white.rounded-2xl');
+    if (gridContainer) {
+       gridContainer.classList.remove('shadow-sm', 'rounded-2xl', 'border');
+       gridContainer.classList.add('border-2', 'border-gray-800');
+    }
+
+    // Force cells to show all content (remove scrollbars)
     const scrollables = clone.querySelectorAll('.overflow-y-auto');
     scrollables.forEach((el) => {
       (el as HTMLElement).style.maxHeight = 'none';
       (el as HTMLElement).style.overflow = 'visible';
+      el.classList.remove('overflow-y-auto', 'max-h-48');
     });
+
+    // Make cell headers smaller
+    const dayHeaders = clone.querySelectorAll('.text-xs');
+    dayHeaders.forEach(el => (el as HTMLElement).style.fontSize = '8px');
+
+    // Make slot text tiny to fit
     const slotEls = clone.querySelectorAll('.text-\\[10px\\]');
     slotEls.forEach((el) => {
       (el as HTMLElement).style.fontSize = '8px';
-      (el as HTMLElement).style.lineHeight = '1';
+      (el as HTMLElement).style.lineHeight = '1.1';
+      (el as HTMLElement).style.padding = '1px 2px';
+      (el as HTMLElement).style.marginBottom = '1px';
     });
+
+    // Reduce minimum height of cells to avoid unnecessary white space
     const cells = clone.querySelectorAll('.min-h-\\[140px\\]');
     cells.forEach((el) => {
-      (el as HTMLElement).style.minHeight = '100px'; 
+      (el as HTMLElement).style.minHeight = '60px'; 
       (el as HTMLElement).classList.remove('min-h-[140px]');
+      // Add border for clarity
+      (el as HTMLElement).style.border = '1px solid #e5e7eb';
     });
+
+    // Append clone to body temporarily (hidden)
     const container = document.createElement('div');
-    container.style.position = 'fixed'; container.style.top = '-10000px'; container.style.left = '0'; container.style.zIndex = '-1000';
+    container.style.position = 'fixed'; 
+    container.style.top = '-10000px'; 
+    container.style.left = '0'; 
+    container.style.zIndex = '-1000';
     container.appendChild(clone);
     document.body.appendChild(container);
+
     const opt = {
-      margin: 5, filename: `Interview_Schedule_${format(currentDate, 'yyyy_MM')}.pdf`,
+      margin: 5, 
+      filename: `Interview_Schedule_${format(currentDate, 'yyyy_MM')}.pdf`,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, scrollY: 0, windowWidth: 1150 },
+      // Use higher scale for better clarity on small text, windowWidth ensures it captures the full 1200px
+      html2canvas: { scale: 3, useCORS: true, scrollY: 0, windowWidth: 1250 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
-      pagebreak: { mode: ['avoid-all', 'css', 'legacy'] } 
+      pagebreak: { mode: 'avoid-all' } // Attempt to keep on one page
     };
+
     // @ts-ignore
     window.html2pdf().set(opt).from(clone).save().then(() => {
       document.body.removeChild(container);
@@ -536,13 +586,14 @@ const App: React.FC = () => {
                     {day.note && (
                       <div 
                         onClick={(e) => { e.stopPropagation(); openNoteEditor(day.date); }}
-                        className={`group/note relative mb-2 text-xs p-1.5 rounded border break-words whitespace-pre-wrap cursor-pointer hover:shadow-sm transition-shadow ${NOTE_STYLES[day.note.color || 'yellow']}`}
+                        className={`group/note relative mb-2 text-xs p-1.5 rounded border break-words whitespace-pre-wrap cursor-pointer hover:shadow-sm transition-shadow ${day.note.color ? NOTE_STYLES[day.note.color] : NOTE_STYLES.yellow}`}
                       >
                         {day.note.content}
                       </div>
                     )}
 
-                    <div className="flex-1 flex flex-col gap-1 overflow-y-auto max-h-48">
+                    {/* Side-by-side layout: flex-row with flex-wrap */}
+                    <div className="flex-1 flex flex-row flex-wrap gap-1 overflow-y-auto max-h-48 content-start">
                       {day.slots.map(slot => (
                         <div
                           key={slot.id}
@@ -556,7 +607,7 @@ const App: React.FC = () => {
                             }
                           }}
                           style={{ borderLeftColor: slot.interviewer.color, backgroundColor: slot.isBooked ? '#f3f4f6' : hexToRgba(slot.interviewer.color, 0.1), opacity: slot.isBooked ? 0.7 : 1 }}
-                          className={`text-[10px] leading-tight p-1 rounded-r border-l-[3px] shadow-sm ring-1 ring-black/5 cursor-pointer hover:shadow transition-all group ${slot.isBooked ? 'grayscale-[0.5]' : ''}`}
+                          className={`text-[10px] leading-tight p-1 rounded-r border-l-[3px] shadow-sm ring-1 ring-black/5 cursor-pointer hover:shadow transition-all group flex-grow basis-[calc(100%)] xl:basis-[calc(50%-4px)] ${slot.isBooked ? 'grayscale-[0.5]' : ''}`}
                         >
                           <div className="flex justify-between items-start">
                             {showNames && <div className={`font-bold truncate ${slot.isBooked ? 'text-gray-500 line-through' : 'text-gray-900'}`}>{slot.interviewer.name}</div>}
@@ -576,7 +627,7 @@ const App: React.FC = () => {
 
       <AIInputModal isOpen={isAIModalOpen} onClose={() => setIsAIModalOpen(false)} onConfirm={handleAIScheduleConfirm} />
       <SlotEditorModal isOpen={isEditorOpen} onClose={() => { setIsEditorOpen(false); setEditingSlot(undefined); }} onSave={handleSaveSlot} onDelete={handleDeleteSlot} initialSlot={editingSlot} />
-      <NoteEditorModal isOpen={isNoteModalOpen} onClose={() => setIsNoteModalOpen(false)} onSave={handleSaveNote} onDelete={handleDeleteNote} date={editingNoteDate} initialNote={editingNoteDate ? getNoteForDate(editingNoteDate) : undefined} />
+      <NoteEditorModal isOpen={isNoteModalOpen} onClose={() => setIsNoteModalOpen(false)} onSave={handleSaveNote} onDelete={handleDeleteNote} date={editingNoteDate} initialNote={editingNoteDate ? dayNotes.find(n => n.date === format(editingNoteDate, 'yyyy-MM-dd')) : undefined} />
       <StatisticsModal isOpen={isStatsModalOpen} onClose={() => setIsStatsModalOpen(false)} slots={slots} interviewers={interviewers} currentDate={currentDate} />
     </div>
   );
