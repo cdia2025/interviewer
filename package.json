@@ -1,6 +1,6 @@
 {
   "name": "interviewer-scheduler",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Interviewer Scheduler with Google Sheets and DeepSeek",
   "main": "server.js",
   "scripts": {

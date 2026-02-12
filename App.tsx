@@ -293,7 +293,6 @@ const App: React.FC = () => {
 
   const pasteNote = (date: Date) => {
     if (clipboardNote) {
-      // Direct type assertion as requested to resolve TS2322
       const noteColor = (clipboardNote.color || 'yellow') as NoteColor;
       handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
     }
