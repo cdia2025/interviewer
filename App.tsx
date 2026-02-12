@@ -14,7 +14,7 @@ import {
   parse,
   isValid
 } from 'date-fns';
-import { AvailabilitySlot, Interviewer, ParsedSlot, DayInfo, DayNote } from './types';
+import { AvailabilitySlot, Interviewer, ParsedSlot, DayInfo, DayNote, NoteColor } from './types';
 import { INTERVIEWER_COLORS } from './constants';
 import { Button } from './components/Button';
 import { AIInputModal } from './components/AIInputModal';
@@ -267,9 +267,14 @@ const App: React.FC = () => {
     setIsEditorOpen(false);
   };
 
-  const handleSaveNote = (date: string, content: string, color: 'yellow' | 'blue' | 'green' | 'red' | 'purple' = 'yellow') => {
+  const handleSaveNote = (date: string, content: string, color: string = 'yellow') => {
     const nextNotes = dayNotes.filter(n => n.date !== date);
-    if (content.trim()) nextNotes.push({ date, content, color });
+    
+    // Explicitly validate and cast the color to avoid TS errors with string inference
+    const validColors = ['yellow', 'blue', 'green', 'red', 'purple'];
+    const safeColor: NoteColor = validColors.includes(color) ? (color as NoteColor) : 'yellow';
+
+    if (content.trim()) nextNotes.push({ date, content, color: safeColor });
     updateData(slots, interviewers, nextNotes);
   };
 
@@ -286,6 +291,7 @@ const App: React.FC = () => {
   const copyNote = (note: DayNote) => setClipboardNote(note);
 
   const pasteNote = (date: Date) => {
+    // Pass color even if undefined or inferred as string; handleSaveNote now accepts string
     if (clipboardNote) handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, clipboardNote.color);
   };
 

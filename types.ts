@@ -1,4 +1,6 @@
 
+export type NoteColor = 'yellow' | 'blue' | 'green' | 'red' | 'purple';
+
 export interface Interviewer {
   id: string;
   name: string;
@@ -26,7 +28,7 @@ export interface ParsedSlot {
 export interface DayNote {
   date: string; // YYYY-MM-DD
   content: string;
-  color?: 'yellow' | 'blue' | 'green' | 'red' | 'purple';
+  color?: NoteColor;
 }
 
 export interface DayInfo {
