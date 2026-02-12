@@ -296,13 +296,14 @@ const copyNote = (note: DayNote) => setClipboardNote(note);
 // 修正后的 pasteNote 函數
 const pasteNote = (date: Date) => {
   if (clipboardNote) {
-    const rawColor = clipboardNote.color;
-    let noteColor: NoteColor = 'yellow';
-    
-    if (rawColor === 'yellow' || rawColor === 'blue' || rawColor === 'green' || rawColor === 'red' || rawColor === 'purple') {
-      noteColor = rawColor;
-    }
-    
+    // 直接使用三元運算符進行類型檢查，確保返回 NoteColor
+    const noteColor: NoteColor = 
+      clipboardNote.color === 'yellow' || clipboardNote.color === 'blue' || 
+      clipboardNote.color === 'green' || clipboardNote.color === 'red' || 
+      clipboardNote.color === 'purple' 
+        ? clipboardNote.color 
+        : 'yellow';
+        
     handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
   }
 };
