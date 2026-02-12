@@ -1,0 +1,8 @@
+{
+  "name": "Interviewer Scheduler AI",
+  "description": "A smart interviewer availability management tool featuring AI-powered natural language scheduling, visual calendar views, and Excel export capabilities.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
