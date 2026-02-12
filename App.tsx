@@ -84,10 +84,10 @@ const App: React.FC = () => {
       
       setSlots(data.slots || []);
       setInterviewers(data.interviewers || []);
-      // Ensure notes color is valid or fallback
+      // Ensure notes color is valid or fallback with strict type assertion
       const validNotes = (data.notes || []).map((n: any) => ({
          ...n,
-         color: ['yellow', 'blue', 'green', 'red', 'purple'].includes(n.color) ? n.color : 'yellow'
+         color: (['yellow', 'blue', 'green', 'red', 'purple'].includes(n.color) ? n.color : 'yellow') as NoteColor
       }));
       setDayNotes(validNotes);
       
@@ -293,7 +293,7 @@ const App: React.FC = () => {
   const pasteNote = (date: Date) => {
     if (clipboardNote) {
        // Explicit cast to NoteColor to satisfy strict typing
-       const noteColor: NoteColor = clipboardNote.color || 'yellow';
+       const noteColor = (clipboardNote.color || 'yellow') as NoteColor;
        handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
     }
   };
