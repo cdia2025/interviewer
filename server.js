@@ -93,12 +93,12 @@ app.get('/api/data', async (req, res) => {
     const invRows = response.data.valueRanges[1].values || [];
     const noteRows = response.data.valueRanges[2].values || [];
 
-    // Filter out rows that don't have an ID or Date to prevent frontend crashes
+    // STRICT FILTERING: ensure ID, Date, StartTime, EndTime exist
     const slots = slotRows.slice(1)
       .map(r => ({
         id: r[0], interviewerId: r[1], date: r[2], startTime: r[3], endTime: r[4], isBooked: r[5] === 'true'
       }))
-      .filter(s => s.id && s.date);
+      .filter(s => s.id && s.date && s.startTime && s.endTime);
 
     const interviewers = invRows.slice(1)
       .map(r => ({

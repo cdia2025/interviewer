@@ -71,7 +71,15 @@ const App: React.FC = () => {
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       
-      setSlots(data.slots || []);
+      // Robustly map slots to ensure no undefined fields cause crashes
+      const safeSlots = (data.slots || []).map((s: any) => ({
+        ...s,
+        startTime: s.startTime || '00:00',
+        endTime: s.endTime || '00:00',
+        isBooked: !!s.isBooked
+      }));
+
+      setSlots(safeSlots);
       setInterviewers(data.interviewers || []);
       
       // Sanitizing notes data
@@ -412,12 +420,23 @@ const App: React.FC = () => {
   const splitSlotsForDisplay = (daySlots: (AvailabilitySlot & { interviewer: Interviewer })[]) => {
     const result: (AvailabilitySlot & { interviewer: Interviewer })[] = [];
     daySlots.forEach(slot => {
+      // Robust check: if start/end time is missing or empty, skip or push raw
+      if (!slot.startTime || !slot.endTime) {
+        // Pushing raw to avoid crash, but it might not render correctly if time is needed.
+        // Better to skip or give default time in fetchData.
+        // Since we handled defaults in fetchData, this check is just extra safety.
+        result.push(slot);
+        return;
+      }
+      
       const startTime = parse(slot.startTime, 'HH:mm', new Date());
       const endTime = parse(slot.endTime, 'HH:mm', new Date());
+      
       if (!isValid(startTime) || !isValid(endTime)) {
         result.push(slot);
         return;
       }
+      
       let current = startTime;
       while (current < endTime) {
         const next = addMinutes(current, 30);
@@ -444,11 +463,14 @@ const App: React.FC = () => {
       const dateStr = format(date, 'yyyy-MM-dd');
       const daySlotsRaw = slots
         .filter(s => s.date === dateStr && selectedInterviewerIds.has(s.interviewerId))
-        .map(s => ({
-          ...s,
-          interviewer: interviewers.find(i => i.id === s.interviewerId)!
-        }))
-        .filter(s => !!s.interviewer);
+        .map(s => {
+           const inv = interviewers.find(i => i.id === s.interviewerId);
+           // Handle missing interviewer gracefully
+           if (!inv) return null;
+           return { ...s, interviewer: inv };
+        })
+        .filter((s): s is (AvailabilitySlot & { interviewer: Interviewer }) => s !== null);
+
       const displayedSlots = splitSlotsForDisplay(daySlotsRaw);
       return { date, isCurrentMonth: isSameMonth(date, monthStart), slots: displayedSlots, note: dayNotes.find(n => n.date === dateStr) };
     });
