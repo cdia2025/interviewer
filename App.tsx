@@ -296,7 +296,6 @@ const App: React.FC = () => {
       const validColors: NoteColor[] = ['yellow', 'blue', 'green', 'red', 'purple'];
       const rawColor = clipboardNote.color;
       
-      // Use strict type casting to ensure TS understands the flow
       const noteColor: NoteColor = (rawColor && validColors.includes(rawColor as NoteColor)) 
         ? (rawColor as NoteColor) 
         : 'yellow';
