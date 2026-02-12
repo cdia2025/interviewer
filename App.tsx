@@ -53,7 +53,6 @@ const App: React.FC = () => {
   const [dayNotes, setDayNotes] = useState<DayNote[]>([]);
   const [selectedInterviewerIds, setSelectedInterviewerIds] = useState<Set<string>>(new Set());
   const [showNames, setShowNames] = useState(true);
-  const [clipboardNote, setClipboardNote] = useState<DayNote | null>(null);
   
   // Loading state
   const [isLoading, setIsLoading] = useState(true);
@@ -289,28 +288,7 @@ const App: React.FC = () => {
     setIsNoteModalOpen(true);
   };
 
-  const copyNote = (note: DayNote) => setClipboardNote(note);
-
-const copyNote = (note: DayNote) => setClipboardNote(note);
-
-// 修正后的 pasteNote 函數
-const pasteNote = (date: Date) => {
-  if (clipboardNote) {
-    // 使用泛型函數確保類型安全
-    const getValidColor = <T extends string>(color: T | undefined): NoteColor => {
-      const validColors = ['yellow', 'blue', 'green', 'red', 'purple'] as const;
-      if (color && (validColors as readonly string[]).includes(color)) {
-        return color as NoteColor;
-      }
-      return 'yellow';
-    };
-    
-    const noteColor: NoteColor = getValidColor(clipboardNote.color);
-    handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
-  }
-};
-
-const getNoteForDate = (date: Date) => dayNotes.find(n => n.date === format(date, 'yyyy-MM-dd'));
+  const getNoteForDate = (date: Date) => dayNotes.find(n => n.date === format(date, 'yyyy-MM-dd'));
 
   const toggleInterviewerFilter = (id: string) => {
     setSelectedInterviewerIds(prev => {
@@ -512,11 +490,6 @@ const getNoteForDate = (date: Date) => dayNotes.find(n => n.date === format(date
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-gray-200 ring-1 ring-gray-400" /> <span>已預約</span>
               </div>
-              {clipboardNote && (
-                <div className={`mt-2 p-2 rounded border text-xs ${NOTE_STYLES[clipboardNote.color || 'yellow'].replace('bg-yellow-50', 'bg-blue-50').replace('text-yellow-800', 'text-blue-700').replace('border-yellow-100', 'border-blue-200')}`}>
-                   已複製備註，可貼上
-                </div>
-              )}
             </div>
           </div>
         </aside>
@@ -558,15 +531,6 @@ const getNoteForDate = (date: Date) => dayNotes.find(n => n.date === format(date
                       </span>
                       
                       <div className="flex gap-1 opacity-0 group-hover/cell:opacity-100 transition-opacity">
-                         {clipboardNote && (
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); pasteNote(day.date); }}
-                              className="text-gray-300 hover:text-green-500 p-1"
-                              title="貼上備註"
-                            >
-                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
-                            </button>
-                         )}
                          <button 
                            onClick={(e) => { e.stopPropagation(); openNoteEditor(day.date); }}
                            className={`p-1 rounded ${day.note ? 'text-blue-500 opacity-100' : 'text-gray-300 hover:text-blue-500'}`}
@@ -583,13 +547,6 @@ const getNoteForDate = (date: Date) => dayNotes.find(n => n.date === format(date
                         className={`group/note relative mb-2 text-xs p-1.5 rounded border break-words whitespace-pre-wrap cursor-pointer hover:shadow-sm transition-shadow ${NOTE_STYLES[day.note.color || 'yellow']}`}
                       >
                         {day.note.content}
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); copyNote(day.note!); }}
-                          className={`absolute top-0.5 right-0.5 opacity-0 group-hover/note:opacity-100 p-0.5 rounded ${NOTE_BTN_STYLES[day.note.color || 'yellow']}`}
-                          title="複製"
-                        >
-                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path></svg>
-                        </button>
                       </div>
                     )}
 
