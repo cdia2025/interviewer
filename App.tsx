@@ -38,14 +38,6 @@ const NOTE_STYLES: Record<string, string> = {
   purple: 'bg-purple-50 text-purple-800 border-purple-100',
 };
 
-const NOTE_BTN_STYLES: Record<string, string> = {
-  yellow: 'bg-yellow-100 text-yellow-700',
-  blue: 'bg-blue-100 text-blue-700',
-  green: 'bg-emerald-100 text-emerald-700',
-  red: 'bg-red-100 text-red-700',
-  purple: 'bg-purple-100 text-purple-700',
-};
-
 const App: React.FC = () => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [interviewers, setInterviewers] = useState<Interviewer[]>([]);
