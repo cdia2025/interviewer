@@ -296,7 +296,13 @@ const copyNote = (note: DayNote) => setClipboardNote(note);
 // 修正后的 pasteNote 函數
 const pasteNote = (date: Date) => {
   if (clipboardNote) {
-    const noteColor = (clipboardNote.color || 'yellow') as NoteColor;
+    const rawColor = clipboardNote.color;
+    let noteColor: NoteColor = 'yellow';
+    
+    if (rawColor === 'yellow' || rawColor === 'blue' || rawColor === 'green' || rawColor === 'red' || rawColor === 'purple') {
+      noteColor = rawColor;
+    }
+    
     handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
   }
 };
