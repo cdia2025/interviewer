@@ -267,7 +267,7 @@ const App: React.FC = () => {
     setIsEditorOpen(false);
   };
 
-  const handleSaveNote = (date: string, content: string, color: string = 'yellow') => {
+  const handleSaveNote = (date: string, content: string, color: 'yellow' | 'blue' | 'green' | 'red' | 'purple' = 'yellow') => {
     const nextNotes = dayNotes.filter(n => n.date !== date);
     if (content.trim()) nextNotes.push({ date, content, color });
     updateData(slots, interviewers, nextNotes);

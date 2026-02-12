@@ -118,15 +118,30 @@ app.post('/api/ai-parse', async (req, res) => {
     
     if (!apiKey) return res.status(500).json({ error: "DeepSeek API Key not configured" });
 
+    // Enhanced Prompt for complex parsing
     const systemPrompt = `
-      You are a scheduling assistant. Extract interviewer availability from text.
+      You are a specialized scheduling assistant. 
+      Your Task: Extract interviewer availability from unstructured text.
       Current Year: ${currentYear}.
-      Output strictly pure JSON array of objects. No markdown, no backticks.
-      Format: [{"interviewerName": "Name", "date": "YYYY-MM-DD", "startTime": "HH:mm", "endTime": "HH:mm"}]
+      
+      Input Scenarios:
+      1. Single person: "John 5/12 10-12"
+      2. Multiple people: "Alex: 5/12 9am-11am, Sarah: 5/13 2pm-4pm"
+      3. Implicit Name: "5/12 10:00-12:00" (If no name found, use "Unknown")
+      4. Month/Day handling: Parse "5月12日", "5/12", "May 12th".
+
+      Output Format:
+      Strictly a JSON array of objects. NO markdown formatting, NO backticks.
+      [
+        { "interviewerName": "Name", "date": "YYYY-MM-DD", "startTime": "HH:mm", "endTime": "HH:mm" }
+      ]
+
       Rules:
-      - 24h format for time.
-      - If only start time given, assume 1 hour duration.
-      - Handle multiple people/dates.
+      1. Time: Convert all times to 24-hour format (HH:mm). e.g., "2pm" -> "14:00".
+      2. Date: Use the Current Year (${currentYear}) unless specified. Format YYYY-MM-DD.
+      3. Multiple Slots: If a person has multiple times, create separate objects.
+      4. Name Persistence: If a line starts with a name, apply it to all following times until a new name appears.
+      5. Do not hallucinate. If info is missing, do your best or omit.
     `;
 
     const response = await axios.post('https://api.deepseek.com/chat/completions', {
@@ -152,9 +167,13 @@ app.post('/api/ai-parse', async (req, res) => {
         parsed = JSON.parse(cleanJson);
         if (!Array.isArray(parsed) && parsed.interviewers) parsed = parsed.interviewers;
         if (!Array.isArray(parsed) && parsed.slots) parsed = parsed.slots;
-        if (!Array.isArray(parsed)) parsed = Object.values(parsed)[0];
-        if (!Array.isArray(parsed)) throw new Error("Not an array");
+        if (!Array.isArray(parsed)) {
+            const values = Object.values(parsed);
+            const foundArray = values.find(v => Array.isArray(v));
+            parsed = foundArray || [];
+        }
     } catch (e) {
+        console.error("JSON Parse Error", e);
         throw e;
     }
 
@@ -171,7 +190,6 @@ app.use(express.static(path.join(__dirname, 'dist')));
 
 // Handle React Routing (SPA fallback)
 app.get('*', (req, res) => {
-  // If request is not starting with /api, serve index.html
   if (!req.path.startsWith('/api')) {
       res.sendFile(path.join(__dirname, 'dist', 'index.html'));
   } else {
