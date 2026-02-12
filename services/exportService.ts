@@ -1,6 +1,7 @@
-import * as XLSX from 'xlsx';
+// @ts-ignore
+import XLSX from 'xlsx-js-style';
 import { AvailabilitySlot, Interviewer, DayNote } from '../types';
-import { format, eachDayOfInterval, startOfMonth, endOfMonth, startOfWeek, endOfWeek, isSameMonth } from 'date-fns';
+import { format, eachDayOfInterval, startOfMonth, endOfMonth, startOfWeek, endOfWeek, isSameMonth, parse, addMinutes } from 'date-fns';
 import { generateTimeSlots } from '../constants';
 
 export const exportToExcel = (
@@ -18,11 +19,10 @@ export const exportToExcel = (
   const calendarSheetData: any[][] = [];
   
   // Title Row
-  calendarSheetData.push([`${format(month, 'yyyy-MM')} 面試排程表`]);
-  calendarSheetData.push([]); 
-
+  calendarSheetData.push([`${format(month, 'MMMM yyyy')}`]);
+  
   // Weekday Headers
-  const daysOfWeek = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+  const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   calendarSheetData.push(daysOfWeek);
 
   // Generate Calendar Days
@@ -37,55 +37,106 @@ export const exportToExcel = (
     const dayLabel = format(day, 'd');
     const isCurrent = isSameMonth(day, month);
     
-    // Note
-    const note = notes.find(n => n.date === dateStr)?.content || '';
-    
-    // Slots
-    const daySlots = slots
-      .filter(s => s.date === dateStr)
-      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+    let cellContent = "";
 
-    // Construct Cell Content
-    let lines = [];
-    lines.push(isCurrent ? `[${dayLabel}]` : `(${format(day, 'M/d')})`);
-    
-    if (note) {
-      lines.push(`備註: ${note}`);
-      lines.push('----------------');
-    }
-    
-    if (daySlots.length > 0) {
-      daySlots.forEach(s => {
-        const inv = interviewers.find(i => i.id === s.interviewerId);
-        const invName = inv ? inv.name : '未知';
-        const booked = s.isBooked ? ' [已預約]' : ' [可面試]';
-        lines.push(`${s.startTime}-${s.endTime} ${invName}${booked}`);
-      });
+    if (isCurrent) {
+        cellContent += `${dayLabel}\n\n`;
+
+        // Note
+        const note = notes.find(n => n.date === dateStr)?.content || '';
+        if (note) {
+          cellContent += `[${note}]\n`;
+        }
+        
+        // Slots
+        const daySlots = slots
+          .filter(s => s.date === dateStr)
+          .sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+        if (daySlots.length > 0) {
+          daySlots.forEach(s => {
+            const inv = interviewers.find(i => i.id === s.interviewerId);
+            const invName = inv ? inv.name : '未知';
+            cellContent += `${invName} (${s.startTime})\n`;
+          });
+        }
     } else {
-       lines.push('\n\n\n');
+        cellContent = ""; 
     }
 
-    currentWeekCells.push(lines.join('\n'));
+    currentWeekCells.push(cellContent);
 
-    // End of week?
     if ((index + 1) % 7 === 0) {
       calendarSheetData.push(currentWeekCells);
-      calendarSheetData.push([]); // Empty row for visual spacing between weeks
       currentWeekCells = [];
     }
   });
 
   const calendarSheet = XLSX.utils.aoa_to_sheet(calendarSheetData);
-  const wscols = daysOfWeek.map(() => ({ wch: 35 }));
-  calendarSheet['!cols'] = wscols;
+  
+  // --- Styling Logic ---
+  const range = XLSX.utils.decode_range(calendarSheet['!ref']);
+  
+  const borderStyle = {
+    top: { style: "thin", color: { rgb: "000000" } },
+    bottom: { style: "thin", color: { rgb: "000000" } },
+    left: { style: "thin", color: { rgb: "000000" } },
+    right: { style: "thin", color: { rgb: "000000" } }
+  };
 
-  XLSX.utils.book_append_sheet(workbook, calendarSheet, '日曆視圖');
+  const titleStyle = {
+    font: { sz: 14, bold: true, name: "Arial" },
+    alignment: { horizontal: "center", vertical: "center" }
+  };
 
-  // --- Sheet 2: Timeline (時間軸) ---
+  const headerStyle = {
+    fill: { fgColor: { rgb: "EFEFEF" } }, // Light Gray
+    font: { bold: true, name: "Arial" },
+    border: borderStyle,
+    alignment: { horizontal: "center", vertical: "center" }
+  };
+
+  const cellStyle = {
+    border: borderStyle,
+    alignment: { vertical: "top", wrapText: true, horizontal: "left" },
+    font: { name: "Arial", sz: 10 }
+  };
+
+  for (let R = range.s.r; R <= range.e.r; ++R) {
+    for (let C = range.s.c; C <= range.e.c; ++C) {
+      const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+      
+      // Ensure cell exists to apply border
+      if (!calendarSheet[cellAddress]) {
+        calendarSheet[cellAddress] = { t: 's', v: '' };
+      }
+      
+      const cell = calendarSheet[cellAddress];
+
+      if (R === 0) {
+        cell.s = titleStyle;
+      } else if (R === 1) {
+        cell.s = headerStyle;
+      } else {
+        cell.s = cellStyle;
+      }
+    }
+  }
+
+  // Column widths
+  calendarSheet['!cols'] = daysOfWeek.map(() => ({ wch: 25 }));
+  
+  // Merge Title Row
+  calendarSheet['!merges'] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } } 
+  ];
+
+  XLSX.utils.book_append_sheet(workbook, calendarSheet, 'Calendar');
+
+  // --- Sheet 2: Timeline ---
   const summaryData: any[] = [];
   const monthDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
   
-  // Date Headers
   const headerRow = ['時間', ...monthDays.map(d => format(d, 'MM/dd'))];
   summaryData.push(headerRow);
 
@@ -95,7 +146,6 @@ export const exportToExcel = (
       const dateStr = format(day, 'yyyy-MM-dd');
       const activeSlots = slots.filter(s => {
         if (s.date !== dateStr) return false;
-        // Check if current time row falls within the slot
         return s.startTime <= time && s.endTime > time;
       });
       
@@ -112,26 +162,49 @@ export const exportToExcel = (
   });
 
   const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
-  // Set widths for timeline sheet
-  const timelineCols = [{ wch: 10 }, ...monthDays.map(() => ({ wch: 20 }))];
+  // Narrower columns for Timeline (wch 12 instead of 20)
+  const timelineCols = [{ wch: 10 }, ...monthDays.map(() => ({ wch: 12 }))];
   summarySheet['!cols'] = timelineCols;
   
-  XLSX.utils.book_append_sheet(workbook, summarySheet, '時間軸總覽');
+  XLSX.utils.book_append_sheet(workbook, summarySheet, 'Timeline');
 
-  // --- Sheet 3: Raw Data (原始資料) ---
-  const rawData = slots.map(s => {
-    const inv = interviewers.find(i => i.id === s.interviewerId);
-    return {
-      '面試員': inv?.name || '未知',
-      '日期': s.date,
-      '開始時間': s.startTime,
-      '結束時間': s.endTime,
-      '狀態': s.isBooked ? '已預約' : '可面試'
-    };
+  // --- Sheet 3: Raw Data (Split into 30 min intervals) ---
+  const rawData: any[] = [];
+  
+  // Sort for better readability
+  const sortedSlots = [...slots].sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return a.startTime.localeCompare(b.startTime);
   });
+
+  sortedSlots.forEach(s => {
+    const inv = interviewers.find(i => i.id === s.interviewerId);
+    
+    // Parse start and end times to support splitting
+    const baseDate = new Date(); // Dummy date for time parsing
+    let current = parse(s.startTime, 'HH:mm', baseDate);
+    const end = parse(s.endTime, 'HH:mm', baseDate);
+
+    while (current < end) {
+        const next = addMinutes(current, 30);
+        // Safety check to ensure we don't exceed the slot's actual end time
+        if (next > end) break;
+
+        rawData.push({
+          '面試員': inv?.name || '未知',
+          '日期': s.date,
+          '開始時間': format(current, 'HH:mm'),
+          '結束時間': format(next, 'HH:mm'),
+          '狀態': s.isBooked ? '已預約' : '可面試'
+        });
+
+        current = next;
+    }
+  });
+
   const rawSheet = XLSX.utils.json_to_sheet(rawData);
-  XLSX.utils.book_append_sheet(workbook, rawSheet, '原始清單');
+  XLSX.utils.book_append_sheet(workbook, rawSheet, 'Raw Data');
 
   // Trigger Download
-  XLSX.writeFile(workbook, `面試排程表_${format(month, 'yyyy_MM')}.xlsx`);
+  XLSX.writeFile(workbook, `Interview_Schedule_${format(month, 'yyyy_MM')}.xlsx`);
 };
