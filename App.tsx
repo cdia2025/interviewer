@@ -21,6 +21,7 @@ import { AIInputModal } from './components/AIInputModal';
 import { SlotEditorModal } from './components/SlotEditorModal';
 import { NoteEditorModal } from './components/NoteEditorModal';
 import { StatisticsModal } from './components/StatisticsModal';
+import { BatchAddModal } from './components/BatchAddModal';
 import { exportToExcel } from './services/exportService';
 
 const hexToRgba = (hex: string, alpha: number) => {
@@ -55,6 +56,7 @@ const App: React.FC = () => {
   const [isAIModalOpen, setIsAIModalOpen] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [editingSlot, setEditingSlot] = useState<(AvailabilitySlot & { interviewer: Interviewer }) | undefined>();
   
   // Note Modal state
@@ -74,33 +76,24 @@ const App: React.FC = () => {
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       
-      // Robustly map slots to ensure no undefined fields cause crashes
       const safeSlots = (data.slots || []).map((s: any) => ({
         ...s,
-        startTime: s.startTime || '09:00', // Default if missing
-        endTime: s.endTime || '09:30',     // Default if missing
+        startTime: s.startTime || '09:00',
+        endTime: s.endTime || '09:30',
         isBooked: !!s.isBooked
       }));
 
       setSlots(safeSlots);
       setInterviewers(data.interviewers || []);
       
-      // Sanitizing notes data
       const rawNotes = data.notes || [];
-      const validNotes: DayNote[] = rawNotes.map((n: any) => {
-        const colorInput = String(n.color || 'yellow');
-        const validColors = ['yellow', 'blue', 'green', 'red', 'purple'];
-        const finalColor = (validColors.includes(colorInput) ? colorInput : 'yellow') as NoteColor;
-        
-        return {
-          date: String(n.date),
-          content: String(n.content),
-          color: finalColor
-        };
-      });
+      const validNotes: DayNote[] = rawNotes.map((n: any) => ({
+        date: String(n.date),
+        content: String(n.content),
+        color: (['yellow', 'blue', 'green', 'red', 'purple'].includes(String(n.color)) ? n.color : 'yellow') as NoteColor
+      }));
       setDayNotes(validNotes);
       
-      // Keep existing selection if possible, or initialize
       if (data.interviewers && selectedInterviewerIds.size === 0) {
         setSelectedInterviewerIds(new Set(data.interviewers.map((i: Interviewer) => i.id)));
       }
@@ -112,7 +105,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Helper to sync an interviewer if needed
   const ensureInterviewerExists = async (inv: Interviewer) => {
      try {
        await fetch('/api/interviewers', {
@@ -125,15 +117,9 @@ const App: React.FC = () => {
      }
   };
 
-  // Initial Load
   useEffect(() => {
     fetchData();
   }, []);
-
-  const timeToMins = (t: string) => {
-    const [h, m] = t.split(':').map(Number);
-    return h * 60 + m;
-  };
 
   const handleAIScheduleConfirm = async (parsedSlots: ParsedSlot[]) => {
     setIsSaving(true);
@@ -142,8 +128,7 @@ const App: React.FC = () => {
     const createdInterviewerIds = new Set<string>();
 
     for (const ps of parsedSlots) {
-      const rawName = ps.interviewerName;
-      const trimmedName = rawName.trim();
+      const trimmedName = ps.interviewerName.trim();
       let inv = currentInterviewers.find(i => i.name.toLowerCase() === trimmedName.toLowerCase());
 
       if (!inv) {
@@ -168,7 +153,6 @@ const App: React.FC = () => {
     }
 
     setInterviewers(currentInterviewers);
-    // Optimistic Update
     setSlots(prev => [...prev, ...newSlots]);
     
     if (createdInterviewerIds.size > 0) {
@@ -187,10 +171,52 @@ const App: React.FC = () => {
        });
     } catch (e) {
        console.error("Batch save failed", e);
-       alert("批量儲存失敗");
        fetchData();
     } finally {
        setIsSaving(false);
+    }
+  };
+
+  const handleBatchAdd = async (batchSlots: Partial<AvailabilitySlot>[], interviewerName: string) => {
+    setIsSaving(true);
+    const trimmedName = interviewerName.trim();
+    let inv = interviewers.find(i => i.name.toLowerCase() === trimmedName.toLowerCase());
+    
+    if (!inv) {
+      inv = {
+        id: crypto.randomUUID(),
+        name: trimmedName,
+        color: INTERVIEWER_COLORS[interviewers.length % INTERVIEWER_COLORS.length]
+      };
+      setInterviewers(prev => [...prev, inv!]);
+      await ensureInterviewerExists(inv);
+    }
+
+    const finalInvId = inv.id;
+    setSelectedInterviewerIds(prev => new Set([...prev, finalInvId]));
+
+    const fullSlots: AvailabilitySlot[] = batchSlots.map(s => ({
+      id: crypto.randomUUID(),
+      interviewerId: finalInvId,
+      date: s.date!,
+      startTime: s.startTime!,
+      endTime: s.endTime!,
+      isBooked: false
+    }));
+
+    setSlots(prev => [...prev, ...fullSlots]);
+
+    try {
+      await fetch('/api/slots/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fullSlots)
+      });
+    } catch (e) {
+      console.error("Batch add failed", e);
+      fetchData();
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -198,88 +224,75 @@ const App: React.FC = () => {
     setIsSaving(true);
     const trimmedName = interviewerName.trim();
     let inv = interviewers.find(i => i.name.toLowerCase() === trimmedName.toLowerCase());
-    let nextInterviewers = [...interviewers];
-
+    
     if (!inv) {
        inv = {
           id: crypto.randomUUID(),
           name: trimmedName,
           color: INTERVIEWER_COLORS[interviewers.length % INTERVIEWER_COLORS.length]
        };
-       nextInterviewers.push(inv);
-       setInterviewers(nextInterviewers);
-       setSelectedInterviewerIds(prev => new Set([...prev, inv!.id]));
+       setInterviewers(prev => [...prev, inv!]);
        await ensureInterviewerExists(inv);
-    } else {
-       // Ensure existing interviewer is selected (visible) when adding/editing a slot
-       setSelectedInterviewerIds(prev => {
-          const next = new Set(prev);
-          next.add(inv!.id);
-          return next;
-       });
     }
+
+    const finalInvId = inv.id;
+    setSelectedInterviewerIds(prev => new Set([...prev, finalInvId]));
     
     try {
       if (slotData.id) {
         const existingSlot = slots.find(s => s.id === slotData.id);
-        if (existingSlot) {
-            const updatedSlot = { ...existingSlot, ...slotData, interviewerId: inv!.id } as AvailabilitySlot;
-            // Simple update for now, splitting logic preserved in modal logic mostly
-            await fetch(`/api/slots/${updatedSlot.id}`, {
-               method: 'PUT',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify(updatedSlot)
-            });
-            setSlots(prev => prev.map(s => s.id === slotData.id ? updatedSlot : s));
-        }
+        const updatedSlot = { ...existingSlot, ...slotData, interviewerId: finalInvId } as AvailabilitySlot;
+        setSlots(prev => prev.map(s => s.id === slotData.id ? updatedSlot : s));
+        await fetch(`/api/slots/${updatedSlot.id}`, {
+           method: 'PUT',
+           headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify(updatedSlot)
+        });
       } else {
         const newSlot: AvailabilitySlot = {
           id: crypto.randomUUID(),
-          interviewerId: inv!.id,
+          interviewerId: finalInvId,
           date: slotData.date!,
           startTime: slotData.startTime!,
           endTime: slotData.endTime!,
           isBooked: slotData.isBooked || false
         };
+        setSlots(prev => [...prev, newSlot]);
         await fetch('/api/slots', {
            method: 'POST',
            headers: { 'Content-Type': 'application/json' },
            body: JSON.stringify(newSlot)
         });
-        setSlots(prev => [...prev, newSlot]);
       }
     } catch (e) {
       console.error("Save slot error", e);
-      alert("儲存失敗");
+      fetchData();
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleDeleteSlot = async (id: string, isSplitRequest?: boolean) => {
+  const handleDeleteSlot = async (id: string) => {
     setIsSaving(true);
+    setSlots(prev => prev.filter(s => s.id !== id));
+    setIsEditorOpen(false);
     try {
        await fetch(`/api/slots/${id}`, { method: 'DELETE' });
-       setSlots(prev => prev.filter(s => s.id !== id));
     } catch (e) {
       console.error("Delete failed", e);
-      alert("刪除失敗");
+      fetchData();
     } finally {
       setIsSaving(false);
-      setIsEditorOpen(false);
     }
   };
 
   const handleSaveNote = async (date: string, content: string, color: NoteColor = 'yellow') => {
     setIsSaving(true);
-    const newNote: DayNote = { date, content, color: color as NoteColor };
-
-    // Optimistic Update: Update UI immediately
+    const newNote: DayNote = { date, content, color };
     setDayNotes(prev => {
         const filtered = prev.filter(n => n.date !== date);
         return content.trim() ? [...filtered, newNote] : filtered;
     });
-
     try {
       await fetch('/api/notes', {
          method: 'POST',
@@ -287,8 +300,7 @@ const App: React.FC = () => {
          body: JSON.stringify(newNote)
       });
     } catch (e) {
-      console.error("Note save failed", e);
-      fetchData(); // Sync on error
+      fetchData();
     } finally {
       setIsSaving(false);
     }
@@ -299,38 +311,23 @@ const App: React.FC = () => {
     setClipboardNote({ content: note.content, color: note.color || 'yellow' });
   };
 
-  // Improved Type-Safe Paste Function using Generics
   const handlePasteNote = (date: Date) => {
     if (clipboardNote) {
-      // 使用泛型輔助函數來解決類型問題
-      const getValidColor = <T extends string>(color: T | undefined): NoteColor => {
-        const validColors = ['yellow', 'blue', 'green', 'red', 'purple'] as const;
-        if (color && (validColors as readonly string[]).includes(color)) {
-          return color as NoteColor;
-        }
-        return 'yellow';
-      };
-      
-      const noteColor: NoteColor = getValidColor(clipboardNote.color);
-      handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
+      const dateStr = format(date, 'yyyy-MM-dd');
+      handleSaveNote(dateStr, clipboardNote.content, clipboardNote.color as NoteColor);
     }
   };
 
   const handleDeleteNote = async (date: string) => {
     setIsSaving(true);
+    setDayNotes(prev => prev.filter(n => n.date !== date));
     try {
       await fetch(`/api/notes/${date}`, { method: 'DELETE' });
-      setDayNotes(prev => prev.filter(n => n.date !== date));
     } catch (e) {
-      console.error("Note delete failed", e);
+      fetchData();
     } finally {
       setIsSaving(false);
     }
-  };
-
-  const openNoteEditor = (date: Date) => {
-    setEditingNoteDate(date);
-    setIsNoteModalOpen(true);
   };
 
   const toggleInterviewerFilter = (id: string) => {
@@ -346,7 +343,6 @@ const App: React.FC = () => {
     const seen = new Set();
     const activeIds = new Set<string>();
     slots.forEach(s => {
-      if (!s.date) return;
       const sDate = parse(s.date, 'yyyy-MM-dd', new Date());
       if (isValid(sDate) && isSameMonth(sDate, currentDate)) activeIds.add(s.interviewerId);
     });
@@ -362,19 +358,12 @@ const App: React.FC = () => {
   const splitSlotsForDisplay = (daySlots: (AvailabilitySlot & { interviewer: Interviewer })[]) => {
     const result: (AvailabilitySlot & { interviewer: Interviewer })[] = [];
     daySlots.forEach(slot => {
-      if (!slot.startTime || !slot.endTime) {
-        result.push(slot);
-        return;
-      }
-      
       const startTime = parse(slot.startTime, 'HH:mm', new Date());
       const endTime = parse(slot.endTime, 'HH:mm', new Date());
-      
       if (!isValid(startTime) || !isValid(endTime)) {
         result.push(slot);
         return;
       }
-      
       let current = startTime;
       while (current < endTime) {
         const next = addMinutes(current, 30);
@@ -403,18 +392,21 @@ const App: React.FC = () => {
         .filter(s => s.date === dateStr && selectedInterviewerIds.has(s.interviewerId))
         .map(s => {
            const inv = interviewers.find(i => i.id === s.interviewerId);
-           if (!inv) return null;
-           return { ...s, interviewer: inv };
+           return inv ? { ...s, interviewer: inv } : null;
         })
         .filter((s): s is (AvailabilitySlot & { interviewer: Interviewer }) => s !== null);
 
-      const displayedSlots = splitSlotsForDisplay(daySlotsRaw);
-      return { date, isCurrentMonth: isSameMonth(date, monthStart), slots: displayedSlots, note: dayNotes.find(n => n.date === dateStr) };
+      return { 
+        date, 
+        isCurrentMonth: isSameMonth(date, monthStart), 
+        slots: splitSlotsForDisplay(daySlotsRaw), 
+        note: dayNotes.find(n => n.date === dateStr) 
+      };
     });
   }, [currentDate, slots, interviewers, selectedInterviewerIds, dayNotes]);
 
   if (isLoading) {
-    return <div className="min-h-screen flex items-center justify-center text-gray-500">正在從 Google Sheets 載入資料...</div>;
+    return <div className="min-h-screen flex items-center justify-center text-gray-500">正在載入排程資料...</div>;
   }
 
   return (
@@ -424,178 +416,83 @@ const App: React.FC = () => {
           <div className="bg-blue-600 p-2 rounded-lg">
             <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
           </div>
-          <div>
-            <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-blue-500">面試排程助理</h1>
-            {isSaving && <span className="text-[10px] text-blue-400 animate-pulse font-medium">雲端同步中...</span>}
-          </div>
+          <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-blue-500">面試排程助理</h1>
         </div>
         
         <div className="flex flex-wrap gap-2">
           <Button variant="ghost" onClick={() => fetchData(true)} isLoading={isSyncing} className="border border-gray-200">
-            <svg className={`w-4 h-4 mr-2 ${isSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357-2H15"></path></svg>
             同步
           </Button>
           <Button variant="secondary" onClick={() => exportToExcel(currentDate, slots, interviewers, dayNotes)}>
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1M7 10l5 5m0 0l5-5m-5 5V3"></path></svg>
             Excel
           </Button>
           <Button variant="secondary" onClick={() => setIsStatsModalOpen(true)}>
-             <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
              統計
           </Button>
-          <div className="h-8 w-[1px] bg-gray-200 mx-1 self-center hidden md:block"></div>
-          
-          <Button variant="success" onClick={() => { setEditingSlot(undefined); setIsEditorOpen(true); }}>
-             <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
-             新增時段
+          <div className="h-8 w-[1px] bg-gray-200 mx-1 hidden md:block"></div>
+          <Button variant="success" onClick={() => setIsBatchModalOpen(true)}>
+             批量新增
           </Button>
-          
+          <Button variant="success" onClick={() => { setEditingSlot(undefined); setIsEditorOpen(true); }}>
+             新增單筆
+          </Button>
           <Button variant="primary" onClick={() => setIsAIModalOpen(true)}>
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
             AI 輸入
           </Button>
         </div>
       </header>
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-        <aside className="no-print w-full md:w-64 bg-gray-50 border-r border-gray-200 p-6 flex flex-col gap-6">
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">本月面試員 ({uniqueInterviewersForDisplay.length})</h3>
-              <button 
-                onClick={() => setShowNames(!showNames)}
-                className="text-[10px] bg-gray-200 px-2 py-0.5 rounded-full hover:bg-gray-300 transition-colors"
-              >
-                {showNames ? '隱藏名稱' : '顯示名稱'}
-              </button>
-            </div>
-            <div className="space-y-1">
-              {uniqueInterviewersForDisplay.map(inv => (
-                <button
-                  key={inv.id}
-                  onClick={() => toggleInterviewerFilter(inv.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm ${
-                    selectedInterviewerIds.has(inv.id) ? 'bg-white shadow-sm' : 'hover:bg-gray-100'
-                  }`}
-                >
-                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: inv.color }} />
-                  <span className={`flex-1 text-left ${selectedInterviewerIds.has(inv.id) ? 'font-semibold text-gray-900' : 'text-gray-500'}`}>
-                    {inv.name}
-                  </span>
-                  {selectedInterviewerIds.has(inv.id) && (
-                    <svg className="w-4 h-4 text-blue-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"></path></svg>
-                  )}
-                </button>
-              ))}
-              {uniqueInterviewersForDisplay.length === 0 && <p className="text-sm text-gray-400 italic">本月暫無面試資料</p>}
-            </div>
+        <aside className="no-print w-full md:w-64 bg-gray-50 border-r border-gray-200 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase">面試員 ({uniqueInterviewersForDisplay.length})</h3>
+            <button onClick={() => setShowNames(!showNames)} className="text-[10px] bg-gray-200 px-2 py-0.5 rounded-full">{showNames ? '隱藏' : '顯示'}</button>
           </div>
-          
-          <div className="mt-auto pt-6 border-t border-gray-200">
-            <div className="text-[11px] text-gray-400 space-y-1">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full border border-gray-300 bg-white" /> <span>可面試</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-gray-200 ring-1 ring-gray-400" /> <span>已預約</span>
-              </div>
-            </div>
+          <div className="space-y-1">
+            {uniqueInterviewersForDisplay.map(inv => (
+              <button key={inv.id} onClick={() => toggleInterviewerFilter(inv.id)} className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm ${selectedInterviewerIds.has(inv.id) ? 'bg-white shadow-sm font-semibold' : 'text-gray-500'}`}>
+                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: inv.color }} />
+                <span className="flex-1 text-left">{inv.name}</span>
+              </button>
+            ))}
           </div>
         </aside>
 
         <main className="flex-1 overflow-auto bg-gray-50 p-4 md:p-8">
-          <div className="max-w-6xl mx-auto space-y-6 bg-gray-50 p-4 rounded-xl">
+          <div className="max-w-6xl mx-auto space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-3xl font-bold text-gray-800">{format(currentDate, 'yyyy年 MMMM')}</h2>
-              <div className="no-print flex bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-                <button onClick={() => setCurrentDate(subMonths(currentDate, 1))} className="p-2 hover:bg-gray-50 border-r border-gray-200">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"></path></svg>
-                </button>
-                <button onClick={() => setCurrentDate(new Date())} className="px-4 py-2 text-sm font-medium hover:bg-gray-50">返回今天</button>
-                <button onClick={() => setCurrentDate(addMonths(currentDate, 1))} className="p-2 hover:bg-gray-50 border-l border-gray-200">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"></path></svg>
-                </button>
+              <div className="no-print flex bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
+                <button onClick={() => setCurrentDate(subMonths(currentDate, 1))} className="p-2 border-r hover:bg-gray-50">上月</button>
+                <button onClick={() => setCurrentDate(new Date())} className="px-4 py-2 text-sm hover:bg-gray-50">今天</button>
+                <button onClick={() => setCurrentDate(addMonths(currentDate, 1))} className="p-2 border-l hover:bg-gray-50">下月</button>
               </div>
             </div>
 
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="grid grid-cols-7 border-b border-gray-100 bg-gray-50">
+              <div className="grid grid-cols-7 border-b bg-gray-50">
                 {['日', '一', '二', '三', '四', '五', '六'].map(day => (
-                  <div key={day} className="py-3 text-center text-xs font-bold text-gray-400 uppercase tracking-widest">星期{day}</div>
+                  <div key={day} className="py-3 text-center text-xs font-bold text-gray-400 uppercase">星期{day}</div>
                 ))}
               </div>
               <div className="grid grid-cols-7">
                 {calendarDays.map((day, idx) => (
-                  <div
-                    key={idx}
-                    className={`min-h-[140px] border-r border-b border-gray-100 p-2 flex flex-col gap-1 transition-colors hover:bg-gray-50/50 relative group/cell ${
-                      !day.isCurrentMonth ? 'bg-gray-50/50 opacity-40' : ''
-                    }`}
-                  >
-                    <div className="flex justify-between items-start mb-1">
-                      <span className={`text-sm font-semibold w-7 h-7 flex items-center justify-center rounded-full ${
-                        isSameDay(day.date, new Date()) ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400'
-                      }`}>
+                  <div key={idx} className={`min-h-[140px] border-r border-b p-2 flex flex-col gap-1 group/cell ${!day.isCurrentMonth ? 'bg-gray-50/50 opacity-40' : ''}`}>
+                    <div className="flex justify-between items-start">
+                      <span className={`text-sm font-semibold w-7 h-7 flex items-center justify-center rounded-full ${isSameDay(day.date, new Date()) ? 'bg-blue-600 text-white' : 'text-gray-400'}`}>
                         {format(day.date, 'd')}
                       </span>
-                      
-                      <div className="flex gap-1 opacity-0 group-hover/cell:opacity-100 transition-opacity">
-                         {clipboardNote && (
-                           <button 
-                             onClick={(e) => { e.stopPropagation(); handlePasteNote(day.date); }}
-                             className="p-1 rounded text-gray-300 hover:text-green-600 hover:bg-green-50 transition-colors"
-                             title="貼上備註"
-                           >
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
-                           </button>
-                         )}
-                         <button 
-                           onClick={(e) => { e.stopPropagation(); openNoteEditor(day.date); }}
-                           className={`p-1 rounded ${day.note ? 'text-blue-500 opacity-100' : 'text-gray-300 hover:text-blue-500'}`}
-                           title="編輯備註"
-                         >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
-                         </button>
+                      <div className="flex gap-1 opacity-0 group-hover/cell:opacity-100">
+                        {clipboardNote && <button onClick={() => handlePasteNote(day.date)} className="text-gray-300 hover:text-green-500">貼上</button>}
+                        <button onClick={() => { setEditingNoteDate(day.date); setIsNoteModalOpen(true); }} className="text-gray-300 hover:text-blue-500">備註</button>
                       </div>
                     </div>
-
-                    {day.note && (
-                      <div 
-                        onClick={(e) => { e.stopPropagation(); openNoteEditor(day.date); }}
-                        className={`group/note relative mb-2 text-xs p-1.5 rounded border break-words whitespace-pre-wrap cursor-pointer hover:shadow-sm transition-shadow ${day.note.color ? NOTE_STYLES[day.note.color] : NOTE_STYLES.yellow}`}
-                      >
-                        {day.note.content}
-                        <button
-                           onClick={(e) => handleCopyNote(e, day.note!)}
-                           className="absolute top-1 right-1 p-0.5 rounded-full bg-white/50 hover:bg-white text-gray-500 hover:text-blue-600 opacity-0 group-hover/note:opacity-100 transition-opacity"
-                           title="複製備註"
-                        >
-                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path></svg>
-                        </button>
-                      </div>
-                    )}
-
-                    <div className="flex-1 flex flex-row flex-wrap gap-1 overflow-y-auto max-h-48 content-start">
+                    {day.note && <div onClick={() => { setEditingNoteDate(day.date); setIsNoteModalOpen(true); }} className={`text-xs p-1.5 rounded border ${NOTE_STYLES[day.note.color || 'yellow']} cursor-pointer`}>{day.note.content}</div>}
+                    <div className="flex-1 flex flex-wrap gap-1 content-start overflow-y-auto max-h-40">
                       {day.slots.map(slot => (
-                        <div
-                          key={slot.id}
-                          onClick={(e) => { 
-                            e.stopPropagation();
-                            const realId = slot.originalId || slot.id.split('__')[0];
-                            const originalSlot = slots.find(s => s.id === realId);
-                            if (originalSlot) {
-                              setEditingSlot({ ...originalSlot, startTime: slot.startTime, endTime: slot.endTime, id: realId, interviewer: slot.interviewer }); 
-                              setIsEditorOpen(true); 
-                            }
-                          }}
-                          style={{ borderLeftColor: slot.interviewer.color, backgroundColor: slot.isBooked ? '#f3f4f6' : hexToRgba(slot.interviewer.color, 0.1), opacity: slot.isBooked ? 0.7 : 1 }}
-                          className={`text-[10px] leading-tight p-1 rounded-r border-l-[3px] shadow-sm ring-1 ring-black/5 cursor-pointer hover:shadow transition-all group flex-grow basis-[calc(100%)] xl:basis-[calc(50%-4px)] ${slot.isBooked ? 'grayscale-[0.5]' : ''}`}
-                        >
-                          <div className="flex justify-between items-start">
-                            {showNames && <div className={`font-bold truncate ${slot.isBooked ? 'text-gray-500 line-through' : 'text-gray-900'}`}>{slot.interviewer.name}</div>}
-                            {slot.isBooked && <span className="bg-gray-200 text-gray-600 px-1 rounded text-[8px] uppercase font-bold">已預約</span>}
-                          </div>
-                          <div className="text-gray-500 font-medium">{slot.startTime}</div>
+                        <div key={slot.id} onClick={() => { setEditingSlot(slot); setIsEditorOpen(true); }} style={{ borderLeftColor: slot.interviewer.color, backgroundColor: slot.isBooked ? '#f3f4f6' : hexToRgba(slot.interviewer.color, 0.1) }} className="text-[10px] p-1 rounded-r border-l-[3px] shadow-sm cursor-pointer hover:shadow flex-grow basis-[calc(100%)] xl:basis-[calc(50%-4px)]">
+                          <div className="font-bold truncate">{showNames ? slot.interviewer.name : ''}</div>
+                          <div className="text-gray-500">{slot.startTime} {slot.isBooked ? '(已約)' : ''}</div>
                         </div>
                       ))}
                     </div>
@@ -608,9 +505,10 @@ const App: React.FC = () => {
       </div>
 
       <AIInputModal isOpen={isAIModalOpen} onClose={() => setIsAIModalOpen(false)} onConfirm={handleAIScheduleConfirm} />
-      <SlotEditorModal isOpen={isEditorOpen} onClose={() => { setIsEditorOpen(false); setEditingSlot(undefined); }} onSave={handleSaveSlot} onDelete={handleDeleteSlot} initialSlot={editingSlot} />
+      <SlotEditorModal isOpen={isEditorOpen} onClose={() => setIsEditorOpen(false)} onSave={handleSaveSlot} onDelete={handleDeleteSlot} initialSlot={editingSlot} />
       <NoteEditorModal isOpen={isNoteModalOpen} onClose={() => setIsNoteModalOpen(false)} onSave={handleSaveNote} onDelete={handleDeleteNote} date={editingNoteDate} initialNote={editingNoteDate ? dayNotes.find(n => n.date === format(editingNoteDate, 'yyyy-MM-dd')) : undefined} />
       <StatisticsModal isOpen={isStatsModalOpen} onClose={() => setIsStatsModalOpen(false)} slots={slots} interviewers={interviewers} currentDate={currentDate} />
+      <BatchAddModal isOpen={isBatchModalOpen} onClose={() => setIsBatchModalOpen(false)} onConfirm={handleBatchAdd} interviewers={interviewers} />
     </div>
   );
 };
