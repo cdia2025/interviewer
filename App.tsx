@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   format, 
   addMonths, 
@@ -51,8 +51,6 @@ const App: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   
-  const calendarRef = useRef<HTMLDivElement>(null);
-
   // Modals state
   const [isAIModalOpen, setIsAIModalOpen] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -363,87 +361,6 @@ const App: React.FC = () => {
     });
   }, [currentDate, slots, interviewers, selectedInterviewerIds, dayNotes]);
 
-  const handleExportPDF = () => {
-    if (!calendarRef.current) return;
-    const originalElement = calendarRef.current;
-    
-    // Create a deep clone to modify for printing without affecting the UI
-    const clone = originalElement.cloneNode(true) as HTMLElement;
-    
-    // Apply specific print styles to the clone
-    clone.style.width = '1200px'; // Wide enough for A4 Landscape
-    clone.style.height = 'auto'; 
-    clone.style.maxHeight = 'none';
-    clone.style.overflow = 'visible';
-    clone.style.background = 'white';
-    clone.style.padding = '10px';
-    
-    // Remove the navigation buttons (Previous, Today, Next) from the clone
-    const navButtons = clone.querySelector('.no-print');
-    if (navButtons) navButtons.remove();
-
-    // Adjust the main grid container
-    const gridContainer = clone.querySelector('.bg-white.rounded-2xl');
-    if (gridContainer) {
-       gridContainer.classList.remove('shadow-sm', 'rounded-2xl', 'border');
-       gridContainer.classList.add('border-2', 'border-gray-800');
-    }
-
-    // Force cells to show all content (remove scrollbars)
-    const scrollables = clone.querySelectorAll('.overflow-y-auto');
-    scrollables.forEach((el) => {
-      (el as HTMLElement).style.maxHeight = 'none';
-      (el as HTMLElement).style.overflow = 'visible';
-      el.classList.remove('overflow-y-auto', 'max-h-48');
-    });
-
-    // Make cell headers smaller
-    const dayHeaders = clone.querySelectorAll('.text-xs');
-    dayHeaders.forEach(el => (el as HTMLElement).style.fontSize = '8px');
-
-    // Make slot text tiny to fit
-    const slotEls = clone.querySelectorAll('.text-\\[10px\\]');
-    slotEls.forEach((el) => {
-      (el as HTMLElement).style.fontSize = '8px';
-      (el as HTMLElement).style.lineHeight = '1.1';
-      (el as HTMLElement).style.padding = '1px 2px';
-      (el as HTMLElement).style.marginBottom = '1px';
-    });
-
-    // Reduce minimum height of cells to avoid unnecessary white space
-    const cells = clone.querySelectorAll('.min-h-\\[140px\\]');
-    cells.forEach((el) => {
-      (el as HTMLElement).style.minHeight = '60px'; 
-      (el as HTMLElement).classList.remove('min-h-[140px]');
-      // Add border for clarity
-      (el as HTMLElement).style.border = '1px solid #e5e7eb';
-    });
-
-    // Append clone to body temporarily (hidden)
-    const container = document.createElement('div');
-    container.style.position = 'fixed'; 
-    container.style.top = '-10000px'; 
-    container.style.left = '0'; 
-    container.style.zIndex = '-1000';
-    container.appendChild(clone);
-    document.body.appendChild(container);
-
-    const opt = {
-      margin: 5, 
-      filename: `Interview_Schedule_${format(currentDate, 'yyyy_MM')}.pdf`,
-      image: { type: 'jpeg', quality: 0.98 },
-      // Use higher scale for better clarity on small text, windowWidth ensures it captures the full 1200px
-      html2canvas: { scale: 3, useCORS: true, scrollY: 0, windowWidth: 1250 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
-      pagebreak: { mode: 'avoid-all' } // Attempt to keep on one page
-    };
-
-    // @ts-ignore
-    window.html2pdf().set(opt).from(clone).save().then(() => {
-      document.body.removeChild(container);
-    });
-  };
-
   if (isLoading) {
     return <div className="min-h-screen flex items-center justify-center text-gray-500">正在從 Google Sheets 載入資料...</div>;
   }
@@ -469,10 +386,6 @@ const App: React.FC = () => {
           <Button variant="secondary" onClick={() => exportToExcel(currentDate, slots, interviewers, dayNotes)}>
             <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1M7 10l5 5m0 0l5-5m-5 5V3"></path></svg>
             Excel
-          </Button>
-          <Button variant="secondary" onClick={handleExportPDF}>
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
-            PDF
           </Button>
           <Button variant="secondary" onClick={() => setIsStatsModalOpen(true)}>
              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
@@ -537,7 +450,7 @@ const App: React.FC = () => {
         </aside>
 
         <main className="flex-1 overflow-auto bg-gray-50 p-4 md:p-8">
-          <div ref={calendarRef} className="max-w-6xl mx-auto space-y-6 bg-gray-50 p-4 rounded-xl">
+          <div className="max-w-6xl mx-auto space-y-6 bg-gray-50 p-4 rounded-xl">
             <div className="flex items-center justify-between">
               <h2 className="text-3xl font-bold text-gray-800">{format(currentDate, 'yyyy年 MMMM')}</h2>
               <div className="no-print flex bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
