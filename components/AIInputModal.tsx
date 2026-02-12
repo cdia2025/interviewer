@@ -42,7 +42,7 @@ export const AIInputModal: React.FC<AIInputModalProps> = ({ isOpen, onClose, onC
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
         <div className="p-6 border-b border-gray-100 flex justify-between items-center">
-          <h2 className="text-xl font-bold text-gray-800">AI 快速排程 (智能輸入)</h2>
+          <h2 className="text-xl font-bold text-gray-800">AI 快速排程 (支援多筆輸入)</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
           </button>
@@ -52,16 +52,16 @@ export const AIInputModal: React.FC<AIInputModalProps> = ({ isOpen, onClose, onC
           {!parsedResults ? (
             <>
               <p className="text-sm text-gray-500">
-                可輸入多個面試員、月份、日期及時間。AI 會自動解析並建立資料。
+                您可以在此一次性輸入多位面試員、多個日期及時段。AI 會自動解析並批量建立。
                 <br />
-                範例：<code className="bg-gray-100 px-1 rounded mx-1">陳大文 5月12日 10:00-12:00, 14:00-16:00</code>
+                範例：<code className="bg-gray-100 px-1 rounded mx-1">陳大文 5/12 10:00-12:00, 14:00-16:00</code>
                 <br />
-                範例：<code className="bg-gray-100 px-1 rounded mx-1">李小美: 6/5 早上9點到11點半</code>
+                範例：<code className="bg-gray-100 px-1 rounded mx-1">李小美: 6/5 9-11點, 王大明: 6/6 下午2點到4點</code>
               </p>
               <textarea
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder="在此貼上您的排程文字..."
+                placeholder="在此貼上您的排程文字 (可換行輸入多筆)..."
                 className="w-full h-40 p-4 bg-slate-800 text-white rounded-xl focus:ring-4 focus:ring-blue-500/30 border-none outline-none resize-none font-medium placeholder-slate-400"
               />
               <div className="flex justify-end gap-3">
