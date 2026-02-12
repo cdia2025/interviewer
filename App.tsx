@@ -273,14 +273,8 @@ const App: React.FC = () => {
     setIsEditorOpen(false);
   };
 
-  // Modified to accept string for colorParam to avoid strict type mismatch during calls
-  const handleSaveNote = (date: string, content: string, colorParam: string = 'yellow') => {
+  const handleSaveNote = (date: string, content: string, color: NoteColor = 'yellow') => {
     const nextNotes = dayNotes.filter(n => n.date !== date);
-    
-    // Validate and cast to NoteColor safely
-    const validColors = ['yellow', 'blue', 'green', 'red', 'purple'];
-    const color = (validColors.includes(colorParam) ? colorParam : 'yellow') as NoteColor;
-
     if (content.trim()) nextNotes.push({ date, content, color });
     updateData(slots, interviewers, nextNotes);
   };
@@ -299,8 +293,13 @@ const App: React.FC = () => {
 
   const pasteNote = (date: Date) => {
     if (clipboardNote) {
-       // Now safe to pass string directly as handleSaveNote handles validation
-       handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, clipboardNote.color || 'yellow');
+       // Validate and safe cast (Scheme 2)
+       const validColors: NoteColor[] = ['yellow', 'blue', 'green', 'red', 'purple'];
+       const noteColor: NoteColor = (clipboardNote.color && validColors.includes(clipboardNote.color))
+          ? clipboardNote.color
+          : 'yellow';
+          
+       handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
     }
   };
 
