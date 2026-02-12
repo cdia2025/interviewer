@@ -74,7 +74,7 @@ const App: React.FC = () => {
       setSlots(data.slots || []);
       setInterviewers(data.interviewers || []);
       
-      // Sanitizing notes data - use explicit check to fix TS2322
+      // Sanitizing notes data
       const rawNotes = data.notes || [];
       const validNotes: DayNote[] = rawNotes.map((n: any) => {
         const colorInput = String(n.color || 'yellow');
@@ -95,28 +95,24 @@ const App: React.FC = () => {
       }
     } catch (e) {
       console.error("Fetch Error", e);
-      alert("無法從伺服器獲取資料，請確認網路連線或 Google Sheets 設定。");
+      alert("無法從伺服器獲取資料，請確認網路連線。");
     } finally {
       setIsLoading(false);
       setIsSyncing(false);
     }
   };
 
-  const saveData = async (newSlots: AvailabilitySlot[], newInv: Interviewer[], newNotes: DayNote[]) => {
-    setIsSaving(true);
-    try {
-      const res = await fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slots: newSlots, interviewers: newInv, notes: newNotes })
-      });
-      if (!res.ok) throw new Error("Sync failed");
-    } catch (e) {
-      console.error("Save Error", e);
-      alert("儲存至 Google Sheets 失敗，請手動刷新頁面檢查資料一致性。");
-    } finally {
-      setIsSaving(false);
-    }
+  // Helper to sync an interviewer if needed
+  const ensureInterviewerExists = async (inv: Interviewer) => {
+     try {
+       await fetch('/api/interviewers', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify(inv)
+       });
+     } catch (e) {
+       console.error("Failed to sync interviewer", e);
+     }
   };
 
   // Initial Load
@@ -124,34 +120,19 @@ const App: React.FC = () => {
     fetchData();
   }, []);
 
-  // Update wrapper that updates state AND calls API
-  const updateData = (
-    updatedSlots: AvailabilitySlot[] | ((prev: AvailabilitySlot[]) => AvailabilitySlot[]),
-    updatedInv: Interviewer[] | ((prev: Interviewer[]) => Interviewer[]) = interviewers,
-    updatedNotes: DayNote[] | ((prev: DayNote[]) => DayNote[]) = dayNotes
-  ) => {
-    let nextSlots = typeof updatedSlots === 'function' ? updatedSlots(slots) : updatedSlots;
-    let nextInv = typeof updatedInv === 'function' ? updatedInv(interviewers) : updatedInv;
-    let nextNotes = typeof updatedNotes === 'function' ? updatedNotes(dayNotes) : updatedNotes;
-
-    setSlots(nextSlots);
-    setInterviewers(nextInv);
-    setDayNotes(nextNotes);
-
-    saveData(nextSlots, nextInv, nextNotes);
-  };
-
   const timeToMins = (t: string) => {
     const [h, m] = t.split(':').map(Number);
     return h * 60 + m;
   };
 
-  const handleAIScheduleConfirm = (parsedSlots: ParsedSlot[]) => {
+  const handleAIScheduleConfirm = async (parsedSlots: ParsedSlot[]) => {
+    setIsSaving(true);
     let currentInterviewers = [...interviewers];
     const newSlots: AvailabilitySlot[] = [];
     const createdInterviewerIds = new Set<string>();
 
-    parsedSlots.forEach(ps => {
+    // 1. Prepare Data
+    for (const ps of parsedSlots) {
       const rawName = ps.interviewerName;
       const trimmedName = rawName.trim();
       
@@ -165,6 +146,8 @@ const App: React.FC = () => {
         };
         currentInterviewers.push(inv);
         createdInterviewerIds.add(inv.id);
+        // Sync new interviewer to backend immediately
+        await ensureInterviewerExists(inv);
       }
 
       newSlots.push({
@@ -175,11 +158,11 @@ const App: React.FC = () => {
         endTime: ps.endTime,
         isBooked: false
       });
-    });
+    }
 
-    const finalSlots = [...slots, ...newSlots];
-    updateData(finalSlots, currentInterviewers);
-    
+    // 2. Optimistic Update
+    setInterviewers(currentInterviewers);
+    setSlots(prev => [...prev, ...newSlots]);
     if (createdInterviewerIds.size > 0) {
       setSelectedInterviewerIds(prev => {
         const next = new Set(prev);
@@ -187,13 +170,30 @@ const App: React.FC = () => {
         return next;
       });
     }
+
+    // 3. API Call (Batch)
+    try {
+       await fetch('/api/slots/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newSlots)
+       });
+    } catch (e) {
+       console.error("Batch save failed", e);
+       alert("批量儲存失敗，請重試");
+       fetchData(); // Revert
+    } finally {
+       setIsSaving(false);
+    }
   };
 
-  const handleSaveSlot = (slotData: Partial<AvailabilitySlot>, interviewerName: string) => {
+  const handleSaveSlot = async (slotData: Partial<AvailabilitySlot>, interviewerName: string) => {
+    setIsSaving(true);
     const trimmedName = interviewerName.trim();
     let inv = interviewers.find(i => i.name.toLowerCase() === trimmedName.toLowerCase());
     let nextInterviewers = [...interviewers];
 
+    // Handle Interviewer creation
     if (!inv) {
        inv = {
           id: crypto.randomUUID(),
@@ -201,87 +201,210 @@ const App: React.FC = () => {
           color: INTERVIEWER_COLORS[interviewers.length % INTERVIEWER_COLORS.length]
        };
        nextInterviewers.push(inv);
+       setInterviewers(nextInterviewers);
        setSelectedInterviewerIds(prev => new Set([...prev, inv!.id]));
+       await ensureInterviewerExists(inv);
     }
     
-    let nextSlots = [...slots];
+    try {
+      if (slotData.id) {
+        // Edit Mode
+        const existingSlot = slots.find(s => s.id === slotData.id);
+        
+        if (existingSlot) {
+          // Complex logic for splitting time slots if user changed time
+          // To simplify for atomic operations:
+          // If simply updating properties: PUT
+          // If splitting: This logic needs to be robust. 
+          // Current logic: If range shrinks, we might create new slots.
+          
+          if (existingSlot.startTime !== slotData.startTime || existingSlot.endTime !== slotData.endTime) {
+            const oldStart = timeToMins(existingSlot.startTime);
+            const oldEnd = timeToMins(existingSlot.endTime);
+            const newStart = timeToMins(slotData.startTime!);
+            const newEnd = timeToMins(slotData.endTime!);
 
-    if (slotData.id) {
-      const existingSlot = slots.find(s => s.id === slotData.id);
-      
-      if (existingSlot) {
-        if (existingSlot.startTime !== slotData.startTime || existingSlot.endTime !== slotData.endTime) {
-          const oldStart = timeToMins(existingSlot.startTime);
-          const oldEnd = timeToMins(existingSlot.endTime);
-          const newStart = timeToMins(slotData.startTime!);
-          const newEnd = timeToMins(slotData.endTime!);
+            // Handling splitting or resizing
+            if (newStart >= oldStart && newEnd <= oldEnd) {
+               // We are potentially creating new slots and updating one
+               const slotsToAdd: AvailabilitySlot[] = [];
+               
+               // 1. The main slot (the one we are editing) becomes the target time
+               const updatedMainSlot = { ...existingSlot, startTime: slotData.startTime!, endTime: slotData.endTime!, isBooked: slotData.isBooked, interviewerId: inv.id };
+               
+               // 2. If there is a gap before
+               if (newStart > oldStart) {
+                 const preSlot = { ...existingSlot, id: crypto.randomUUID(), endTime: slotData.startTime! };
+                 slotsToAdd.push(preSlot);
+               }
+               
+               // 3. If there is a gap after
+               if (newEnd < oldEnd) {
+                 const postSlot = { ...existingSlot, id: crypto.randomUUID(), startTime: slotData.endTime! };
+                 slotsToAdd.push(postSlot);
+               }
 
-          if (newStart >= oldStart && newEnd <= oldEnd) {
-             const newSlotsToAdd: AvailabilitySlot[] = [];
-             if (newStart > oldStart) {
-               newSlotsToAdd.push({ ...existingSlot, id: crypto.randomUUID(), endTime: slotData.startTime! });
-             }
-             newSlotsToAdd.push({ ...existingSlot, id: crypto.randomUUID(), startTime: slotData.startTime!, endTime: slotData.endTime!, isBooked: slotData.isBooked, interviewerId: inv.id });
-             if (newEnd < oldEnd) {
-               newSlotsToAdd.push({ ...existingSlot, id: crypto.randomUUID(), startTime: slotData.endTime! });
-             }
-             nextSlots = nextSlots.filter(s => s.id !== slotData.id).concat(newSlotsToAdd);
+               // Perform API Calls
+               // Update the main slot
+               await fetch(`/api/slots/${updatedMainSlot.id}`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(updatedMainSlot)
+               });
+               
+               // Add new split parts
+               if (slotsToAdd.length > 0) {
+                 await fetch('/api/slots/batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(slotsToAdd)
+                 });
+               }
+               
+               // Local Update
+               setSlots(prev => {
+                  const filtered = prev.filter(s => s.id !== slotData.id);
+                  return [...filtered, updatedMainSlot, ...slotsToAdd];
+               });
+
+            } else {
+               // Simple update (expanding or shifting, or just prop change)
+               const updatedSlot = { ...existingSlot, ...slotData, interviewerId: inv!.id } as AvailabilitySlot;
+               await fetch(`/api/slots/${updatedSlot.id}`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(updatedSlot)
+               });
+               setSlots(prev => prev.map(s => s.id === slotData.id ? updatedSlot : s));
+            }
           } else {
-             nextSlots = nextSlots.map(s => s.id === slotData.id ? { ...s, ...slotData, interviewerId: inv!.id } as AvailabilitySlot : s);
+            // No time change, just data update
+            const updatedSlot = { ...existingSlot, ...slotData, interviewerId: inv!.id } as AvailabilitySlot;
+            await fetch(`/api/slots/${updatedSlot.id}`, {
+               method: 'PUT',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify(updatedSlot)
+            });
+            setSlots(prev => prev.map(s => s.id === slotData.id ? updatedSlot : s));
           }
-        } else {
-          nextSlots = nextSlots.map(s => s.id === slotData.id ? { ...s, ...slotData, interviewerId: inv!.id } as AvailabilitySlot : s);
         }
+      } else {
+        // Create Mode
+        const newSlot: AvailabilitySlot = {
+          id: crypto.randomUUID(),
+          interviewerId: inv.id,
+          date: slotData.date!,
+          startTime: slotData.startTime!,
+          endTime: slotData.endTime!,
+          isBooked: slotData.isBooked || false
+        };
+        
+        await fetch('/api/slots', {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify(newSlot)
+        });
+        
+        setSlots(prev => [...prev, newSlot]);
       }
-    } else {
-      const newSlot: AvailabilitySlot = {
-        id: crypto.randomUUID(),
-        interviewerId: inv.id,
-        date: slotData.date!,
-        startTime: slotData.startTime!,
-        endTime: slotData.endTime!,
-        isBooked: slotData.isBooked || false
-      };
-      nextSlots.push(newSlot);
+    } catch (e) {
+      console.error("Save slot error", e);
+      alert("儲存失敗，請檢查網路");
+      fetchData();
+    } finally {
+      setIsSaving(false);
     }
-    updateData(nextSlots, nextInterviewers);
   };
 
-  const handleDeleteSlot = (id: string, isSplitRequest?: boolean) => {
-    let nextSlots = [...slots];
-    if (editingSlot && isSplitRequest) {
-       const existingSlot = slots.find(s => s.id === id);
-       if (existingSlot) {
-          const oldStart = timeToMins(existingSlot.startTime);
-          const oldEnd = timeToMins(existingSlot.endTime);
-          const targetStart = timeToMins(editingSlot.startTime);
-          const targetEnd = timeToMins(editingSlot.endTime);
-          if (targetStart >= oldStart && targetEnd <= oldEnd) {
-             const newSlotsToAdd: AvailabilitySlot[] = [];
-             if (targetStart > oldStart) newSlotsToAdd.push({ ...existingSlot, id: crypto.randomUUID(), endTime: editingSlot.startTime });
-             if (targetEnd < oldEnd) newSlotsToAdd.push({ ...existingSlot, id: crypto.randomUUID(), startTime: editingSlot.endTime });
-             nextSlots = nextSlots.filter(s => s.id !== id).concat(newSlotsToAdd);
-          }
-       }
-    } else {
-       nextSlots = nextSlots.filter(s => s.id !== id);
+  const handleDeleteSlot = async (id: string, isSplitRequest?: boolean) => {
+    setIsSaving(true);
+    try {
+      if (editingSlot && isSplitRequest) {
+         // This is a "delete the middle" operation which is actually:
+         // 1. Delete original
+         // 2. Create 2 new slots (before and after)
+         // OR
+         // 1. Resize original to "before"
+         // 2. Create new slot "after"
+         // Let's go with robust: Delete original, Create two new ones.
+         
+         const existingSlot = slots.find(s => s.id === id);
+         if (existingSlot) {
+            const oldStart = timeToMins(existingSlot.startTime);
+            const oldEnd = timeToMins(existingSlot.endTime);
+            const targetStart = timeToMins(editingSlot.startTime);
+            const targetEnd = timeToMins(editingSlot.endTime);
+            
+            if (targetStart >= oldStart && targetEnd <= oldEnd) {
+               const slotsToAdd: AvailabilitySlot[] = [];
+               if (targetStart > oldStart) slotsToAdd.push({ ...existingSlot, id: crypto.randomUUID(), endTime: editingSlot.startTime });
+               if (targetEnd < oldEnd) slotsToAdd.push({ ...existingSlot, id: crypto.randomUUID(), startTime: editingSlot.endTime });
+               
+               // API: Delete Original
+               await fetch(`/api/slots/${id}`, { method: 'DELETE' });
+               
+               // API: Add New
+               if (slotsToAdd.length > 0) {
+                  await fetch('/api/slots/batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(slotsToAdd)
+                  });
+               }
+
+               // Local Update
+               setSlots(prev => prev.filter(s => s.id !== id).concat(slotsToAdd));
+            }
+         }
+      } else {
+         // Standard Delete
+         await fetch(`/api/slots/${id}`, { method: 'DELETE' });
+         setSlots(prev => prev.filter(s => s.id !== id));
+      }
+    } catch (e) {
+      console.error("Delete failed", e);
+      alert("刪除失敗");
+      fetchData();
+    } finally {
+      setIsSaving(false);
+      setIsEditorOpen(false);
     }
-    updateData(nextSlots);
-    setIsEditorOpen(false);
   };
 
-  const handleSaveNote = (date: string, content: string, color: NoteColor = 'yellow') => {
-    const nextNotes = dayNotes.filter(n => n.date !== date);
-    if (content.trim()) {
+  const handleSaveNote = async (date: string, content: string, color: NoteColor = 'yellow') => {
+    setIsSaving(true);
+    try {
       const newNote: DayNote = { date, content, color: color as NoteColor };
-      nextNotes.push(newNote);
+      
+      // API Upsert Note
+      await fetch('/api/notes', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify(newNote)
+      });
+
+      // Local Update
+      setDayNotes(prev => {
+         const filtered = prev.filter(n => n.date !== date);
+         return content.trim() ? [...filtered, newNote] : filtered;
+      });
+    } catch (e) {
+      console.error("Note save failed", e);
+    } finally {
+      setIsSaving(false);
     }
-    updateData(slots, interviewers, nextNotes);
   };
 
-  const handleDeleteNote = (date: string) => {
-    const nextNotes = dayNotes.filter(n => n.date !== date);
-    updateData(slots, interviewers, nextNotes);
+  const handleDeleteNote = async (date: string) => {
+    setIsSaving(true);
+    try {
+      await fetch(`/api/notes/${date}`, { method: 'DELETE' });
+      setDayNotes(prev => prev.filter(n => n.date !== date));
+    } catch (e) {
+      console.error("Note delete failed", e);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const openNoteEditor = (date: Date) => {
@@ -374,7 +497,7 @@ const App: React.FC = () => {
           </div>
           <div>
             <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-blue-500">面試排程助理</h1>
-            {isSaving && <span className="text-[10px] text-blue-400 animate-pulse font-medium">雲端儲存中...</span>}
+            {isSaving && <span className="text-[10px] text-blue-400 animate-pulse font-medium">雲端同步中...</span>}
           </div>
         </div>
         

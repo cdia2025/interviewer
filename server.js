@@ -42,7 +42,42 @@ async function ensureTabs() {
   }
 }
 
-// API: Get Data
+// --- Helper Functions ---
+
+// Find row index by ID (Column A) in a specific sheet
+async function findRowIndexById(sheetName, id) {
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${sheetName}!A:A`, 
+  });
+  const rows = response.data.values || [];
+  // Arrays are 0-indexed, Sheets rows are 1-indexed. 
+  // API responses map index 0 to Row 1.
+  const index = rows.findIndex(row => row[0] === id);
+  return index; // Returns -1 if not found, or 0-based index (Row 1 = index 0)
+}
+
+// Find row index by Date (Column A) for Notes
+async function findRowIndexByDate(sheetName, dateStr) {
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${sheetName}!A:A`, 
+  });
+  const rows = response.data.values || [];
+  const index = rows.findIndex(row => row[0] === dateStr);
+  return index;
+}
+
+// Get Sheet ID by Title (needed for deleteDimension)
+async function getSheetIdByTitle(title) {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+  const sheet = meta.data.sheets.find(s => s.properties.title === title);
+  return sheet ? sheet.properties.sheetId : null;
+}
+
+// --- API Routes ---
+
+// GET Data (Read All)
 app.get('/api/data', async (req, res) => {
   try {
     if (!SPREADSHEET_ID) throw new Error("Missing SPREADSHEET_ID");
@@ -76,39 +111,218 @@ app.get('/api/data', async (req, res) => {
   }
 });
 
-// API: Sync Data
-app.post('/api/sync', async (req, res) => {
+// --- ATOMIC OPERATIONS ---
+
+// 1. Slots Operations
+
+// ADD Slot (Single)
+app.post('/api/slots', async (req, res) => {
   try {
-    const { slots, interviewers, notes } = req.body;
-    if (!SPREADSHEET_ID) throw new Error("Missing SPREADSHEET_ID");
-
-    const slotValues = [['ID', 'InterviewerID', 'Date', 'Start', 'End', 'IsBooked'], 
-      ...slots.map(s => [s.id, s.interviewerId, s.date, s.startTime, s.endTime, s.isBooked])];
+    const s = req.body;
+    const values = [[s.id, s.interviewerId, s.date, s.startTime, s.endTime, s.isBooked]];
     
-    const invValues = [['ID', 'Name', 'Color'], 
-      ...interviewers.map(i => [i.id, i.name, i.color])];
-    
-    const noteValues = [['Date', 'Content', 'Color'], 
-      ...notes.map(n => [n.date, n.content, n.color])];
-
-    await sheets.spreadsheets.values.batchUpdate({
+    await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
-      requestBody: {
-        valueInputOption: 'RAW',
-        data: [
-          { range: 'Slots!A1', values: slotValues },
-          { range: 'Interviewers!A1', values: invValues },
-          { range: 'Notes!A1', values: noteValues }
-        ]
-      }
+      range: 'Slots!A:F',
+      valueInputOption: 'RAW',
+      requestBody: { values }
     });
-
     res.json({ success: true });
-  } catch (error) {
-    console.error('Sheet Write Error:', error);
-    res.status(500).json({ error: error.message });
+  } catch (e) {
+    console.error('Add Slot Error:', e);
+    res.status(500).json({ error: e.message });
   }
 });
+
+// ADD Slots (Batch)
+app.post('/api/slots/batch', async (req, res) => {
+  try {
+    const slots = req.body; // Array of slots
+    if (!slots || slots.length === 0) return res.json({ success: true });
+
+    const values = slots.map(s => [s.id, s.interviewerId, s.date, s.startTime, s.endTime, s.isBooked]);
+    
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Slots!A:F',
+      valueInputOption: 'RAW',
+      requestBody: { values }
+    });
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Batch Add Slots Error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// UPDATE Slot
+app.put('/api/slots/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const s = req.body;
+    const rowIndex = await findRowIndexById('Slots', id);
+
+    if (rowIndex === -1) {
+      // If not found, create it (fallback)
+      const values = [[s.id, s.interviewerId, s.date, s.startTime, s.endTime, s.isBooked]];
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Slots!A:F',
+        valueInputOption: 'RAW',
+        requestBody: { values }
+      });
+    } else {
+      // Update specific row (Row index 0 is A1, so rowIndex + 1)
+      const range = `Slots!A${rowIndex + 1}:F${rowIndex + 1}`;
+      const values = [[s.id, s.interviewerId, s.date, s.startTime, s.endTime, s.isBooked]];
+      
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range,
+        valueInputOption: 'RAW',
+        requestBody: { values }
+      });
+    }
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Update Slot Error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE Slot
+app.delete('/api/slots/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rowIndex = await findRowIndexById('Slots', id);
+    
+    if (rowIndex !== -1) {
+      const sheetId = await getSheetIdByTitle('Slots');
+      if (sheetId === null) throw new Error("Sheet not found");
+
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          requests: [{
+            deleteDimension: {
+              range: {
+                sheetId: sheetId,
+                dimension: 'ROWS',
+                startIndex: rowIndex,
+                endIndex: rowIndex + 1
+              }
+            }
+          }]
+        }
+      });
+    }
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Delete Slot Error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 2. Notes Operations (Keyed by Date)
+
+// UPSERT Note
+app.post('/api/notes', async (req, res) => {
+  try {
+    const n = req.body;
+    const rowIndex = await findRowIndexByDate('Notes', n.date);
+
+    if (rowIndex === -1) {
+      // Create new
+      const values = [[n.date, n.content, n.color]];
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Notes!A:C',
+        valueInputOption: 'RAW',
+        requestBody: { values }
+      });
+    } else {
+      // Update existing
+      const range = `Notes!A${rowIndex + 1}:C${rowIndex + 1}`;
+      const values = [[n.date, n.content, n.color]];
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range,
+        valueInputOption: 'RAW',
+        requestBody: { values }
+      });
+    }
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Save Note Error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE Note
+app.delete('/api/notes/:date', async (req, res) => {
+  try {
+    const { date } = req.params;
+    const rowIndex = await findRowIndexByDate('Notes', date);
+    
+    if (rowIndex !== -1) {
+      const sheetId = await getSheetIdByTitle('Notes');
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          requests: [{
+            deleteDimension: {
+              range: {
+                sheetId: sheetId,
+                dimension: 'ROWS',
+                startIndex: rowIndex,
+                endIndex: rowIndex + 1
+              }
+            }
+          }]
+        }
+      });
+    }
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Delete Note Error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 3. Interviewers Operations
+
+// UPSERT Interviewer (If ID exists update, else add. Simplified to Add if not exists)
+app.post('/api/interviewers', async (req, res) => {
+  try {
+    const inv = req.body;
+    const rowIndex = await findRowIndexById('Interviewers', inv.id);
+
+    if (rowIndex === -1) {
+       const values = [[inv.id, inv.name, inv.color]];
+       await sheets.spreadsheets.values.append({
+         spreadsheetId: SPREADSHEET_ID,
+         range: 'Interviewers!A:C',
+         valueInputOption: 'RAW',
+         requestBody: { values }
+       });
+    } else {
+       // Optional: Update name/color if it changes, but for now we assume they are static or low freq
+       const range = `Interviewers!A${rowIndex + 1}:C${rowIndex + 1}`;
+       const values = [[inv.id, inv.name, inv.color]];
+       await sheets.spreadsheets.values.update({
+         spreadsheetId: SPREADSHEET_ID,
+         range,
+         valueInputOption: 'RAW',
+         requestBody: { values }
+       });
+    }
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Save Interviewer Error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 
 // API: DeepSeek Proxy
 app.post('/api/ai-parse', async (req, res) => {
