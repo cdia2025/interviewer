@@ -293,13 +293,16 @@ const App: React.FC = () => {
 
   const pasteNote = (date: Date) => {
     if (clipboardNote) {
-       // Validate and safe cast (Fixing TS2322 by explicitly casting string to NoteColor)
-       const validColors: NoteColor[] = ['yellow', 'blue', 'green', 'red', 'purple'];
-       const noteColor: NoteColor = (clipboardNote.color && validColors.includes(clipboardNote.color as NoteColor)) 
-          ? (clipboardNote.color as NoteColor)
-          : 'yellow';
-          
-       handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
+      // 安全方案：驗證顏色值是否有效
+      const validColors: NoteColor[] = ['yellow', 'blue', 'green', 'red', 'purple'];
+      // 這裡先將 clipboardNote.color 強制轉為 NoteColor 進行檢查，確保類型匹配
+      const inputColor = clipboardNote.color as NoteColor;
+      
+      const noteColor: NoteColor = validColors.includes(inputColor) 
+        ? inputColor
+        : 'yellow';
+      
+      handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
     }
   };
 
