@@ -84,7 +84,12 @@ const App: React.FC = () => {
       
       setSlots(data.slots || []);
       setInterviewers(data.interviewers || []);
-      setDayNotes(data.notes || []);
+      // Ensure notes color is valid or fallback
+      const validNotes = (data.notes || []).map((n: any) => ({
+         ...n,
+         color: ['yellow', 'blue', 'green', 'red', 'purple'].includes(n.color) ? n.color : 'yellow'
+      }));
+      setDayNotes(validNotes);
       
       // Keep existing selection if possible, or initialize
       if (data.interviewers && selectedInterviewerIds.size === 0) {
@@ -267,14 +272,9 @@ const App: React.FC = () => {
     setIsEditorOpen(false);
   };
 
-  const handleSaveNote = (date: string, content: string, color: string = 'yellow') => {
+  const handleSaveNote = (date: string, content: string, color: NoteColor = 'yellow') => {
     const nextNotes = dayNotes.filter(n => n.date !== date);
-    
-    // Explicitly validate and cast the color to avoid TS errors with string inference
-    const validColors = ['yellow', 'blue', 'green', 'red', 'purple'];
-    const safeColor: NoteColor = validColors.includes(color) ? (color as NoteColor) : 'yellow';
-
-    if (content.trim()) nextNotes.push({ date, content, color: safeColor });
+    if (content.trim()) nextNotes.push({ date, content, color });
     updateData(slots, interviewers, nextNotes);
   };
 
@@ -291,8 +291,11 @@ const App: React.FC = () => {
   const copyNote = (note: DayNote) => setClipboardNote(note);
 
   const pasteNote = (date: Date) => {
-    // Pass color even if undefined or inferred as string; handleSaveNote now accepts string
-    if (clipboardNote) handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, clipboardNote.color);
+    if (clipboardNote) {
+       // Explicit cast to NoteColor to satisfy strict typing
+       const noteColor: NoteColor = clipboardNote.color || 'yellow';
+       handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
+    }
   };
 
   const getNoteForDate = (date: Date) => dayNotes.find(n => n.date === format(date, 'yyyy-MM-dd'));
