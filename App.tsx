@@ -293,14 +293,8 @@ const App: React.FC = () => {
 
   const pasteNote = (date: Date) => {
     if (clipboardNote) {
-      let noteColor: NoteColor = 'yellow';
-      const c = clipboardNote.color;
-      
-      // Explicitly check for valid NoteColor values to satisfy TypeScript strict typing
-      if (c === 'yellow' || c === 'blue' || c === 'green' || c === 'red' || c === 'purple') {
-        noteColor = c;
-      }
-        
+      // Direct type assertion as requested to resolve TS2322
+      const noteColor = (clipboardNote.color || 'yellow') as NoteColor;
       handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
     }
   };
