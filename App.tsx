@@ -296,20 +296,15 @@ const copyNote = (note: DayNote) => setClipboardNote(note);
 // 修正后的 pasteNote 函數
 const pasteNote = (date: Date) => {
   if (clipboardNote) {
-    // 使用 switch 語句進行類型保護，確保返回值是 NoteColor
-    let noteColor: NoteColor;
-    switch (clipboardNote.color) {
-      case 'yellow':
-      case 'blue':
-      case 'green':
-      case 'red':
-      case 'purple':
-        noteColor = clipboardNote.color;
-        break;
-      default:
-        noteColor = 'yellow'; // 默認顏色
-    }
+    // 使用類型守衛函數來確保類型安全
+    const isValidNoteColor = (color: any): color is NoteColor => {
+      return ['yellow', 'blue', 'green', 'red', 'purple'].includes(color);
+    };
     
+    const noteColor: NoteColor = isValidNoteColor(clipboardNote.color) 
+      ? clipboardNote.color 
+      : 'yellow';
+      
     handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
   }
 };
