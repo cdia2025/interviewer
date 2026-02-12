@@ -291,14 +291,17 @@ const App: React.FC = () => {
 
   const copyNote = (note: DayNote) => setClipboardNote(note);
 
-  const pasteNote = (date: Date) => {
-    if (clipboardNote) {
-      const noteColor = (clipboardNote.color || 'yellow') as NoteColor;
-      handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
-    }
-  };
+const copyNote = (note: DayNote) => setClipboardNote(note);
 
-  const getNoteForDate = (date: Date) => dayNotes.find(n => n.date === format(date, 'yyyy-MM-dd'));
+// 修正后的 pasteNote 函數
+const pasteNote = (date: Date) => {
+  if (clipboardNote) {
+    const noteColor = (clipboardNote.color || 'yellow') as NoteColor;
+    handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
+  }
+};
+
+const getNoteForDate = (date: Date) => dayNotes.find(n => n.date === format(date, 'yyyy-MM-dd'));
 
   const toggleInterviewerFilter = (id: string) => {
     setSelectedInterviewerIds(prev => {
