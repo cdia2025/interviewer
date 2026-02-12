@@ -296,15 +296,10 @@ const copyNote = (note: DayNote) => setClipboardNote(note);
 // 修正后的 pasteNote 函數
 const pasteNote = (date: Date) => {
   if (clipboardNote) {
-    // 使用類型守衛函數來確保類型安全
-    const isValidNoteColor = (color: any): color is NoteColor => {
-      return ['yellow', 'blue', 'green', 'red', 'purple'].includes(color);
-    };
-    
-    const noteColor: NoteColor = isValidNoteColor(clipboardNote.color) 
-      ? clipboardNote.color 
-      : 'yellow';
-      
+    // 使用陣列的 find 方法來獲得類型安全的結果
+    const validColors = ['yellow', 'blue', 'green', 'red', 'purple'] as const;
+    const foundColor = validColors.find(c => c === clipboardNote.color);
+    const noteColor: NoteColor = foundColor || 'yellow';
     handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
   }
 };
