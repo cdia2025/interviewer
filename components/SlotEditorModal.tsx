@@ -1,7 +1,7 @@
+
 import React, { useState, useEffect } from 'react';
 import { Button } from './Button';
 import { AvailabilitySlot, Interviewer } from '../types';
-import { format } from 'date-fns';
 
 interface SlotEditorModalProps {
   isOpen: boolean;
@@ -33,9 +33,7 @@ export const SlotEditorModal: React.FC<SlotEditorModalProps> = ({
       setIsBooked(!!initialSlot.isBooked);
     } else {
       setName('');
-      // FIX: Use format(new Date()) to get local date string (YYYY-MM-DD)
-      // instead of toISOString() which returns UTC and might be yesterday
-      setDate(format(new Date(), 'yyyy-MM-dd'));
+      setDate(new Date().toISOString().split('T')[0]);
       setStart('09:00');
       setEnd('10:00');
       setIsBooked(false);
