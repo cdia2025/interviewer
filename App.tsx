@@ -95,7 +95,7 @@ const App: React.FC = () => {
       }
     } catch (e) {
       console.error("Fetch Error", e);
-      alert("無法從伺服器獲取資料，請確認網路連線。");
+      // alert("無法從伺服器獲取資料，請確認網路連線。");
     } finally {
       setIsLoading(false);
       setIsSyncing(false);
@@ -212,12 +212,6 @@ const App: React.FC = () => {
         const existingSlot = slots.find(s => s.id === slotData.id);
         
         if (existingSlot) {
-          // Complex logic for splitting time slots if user changed time
-          // To simplify for atomic operations:
-          // If simply updating properties: PUT
-          // If splitting: This logic needs to be robust. 
-          // Current logic: If range shrinks, we might create new slots.
-          
           if (existingSlot.startTime !== slotData.startTime || existingSlot.endTime !== slotData.endTime) {
             const oldStart = timeToMins(existingSlot.startTime);
             const oldEnd = timeToMins(existingSlot.endTime);
@@ -226,33 +220,26 @@ const App: React.FC = () => {
 
             // Handling splitting or resizing
             if (newStart >= oldStart && newEnd <= oldEnd) {
-               // We are potentially creating new slots and updating one
                const slotsToAdd: AvailabilitySlot[] = [];
                
-               // 1. The main slot (the one we are editing) becomes the target time
                const updatedMainSlot = { ...existingSlot, startTime: slotData.startTime!, endTime: slotData.endTime!, isBooked: slotData.isBooked, interviewerId: inv.id };
                
-               // 2. If there is a gap before
                if (newStart > oldStart) {
                  const preSlot = { ...existingSlot, id: crypto.randomUUID(), endTime: slotData.startTime! };
                  slotsToAdd.push(preSlot);
                }
                
-               // 3. If there is a gap after
                if (newEnd < oldEnd) {
                  const postSlot = { ...existingSlot, id: crypto.randomUUID(), startTime: slotData.endTime! };
                  slotsToAdd.push(postSlot);
                }
 
-               // Perform API Calls
-               // Update the main slot
                await fetch(`/api/slots/${updatedMainSlot.id}`, {
                   method: 'PUT',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(updatedMainSlot)
                });
                
-               // Add new split parts
                if (slotsToAdd.length > 0) {
                  await fetch('/api/slots/batch', {
                     method: 'POST',
@@ -261,14 +248,12 @@ const App: React.FC = () => {
                  });
                }
                
-               // Local Update
                setSlots(prev => {
                   const filtered = prev.filter(s => s.id !== slotData.id);
                   return [...filtered, updatedMainSlot, ...slotsToAdd];
                });
 
             } else {
-               // Simple update (expanding or shifting, or just prop change)
                const updatedSlot = { ...existingSlot, ...slotData, interviewerId: inv!.id } as AvailabilitySlot;
                await fetch(`/api/slots/${updatedSlot.id}`, {
                   method: 'PUT',
@@ -278,7 +263,6 @@ const App: React.FC = () => {
                setSlots(prev => prev.map(s => s.id === slotData.id ? updatedSlot : s));
             }
           } else {
-            // No time change, just data update
             const updatedSlot = { ...existingSlot, ...slotData, interviewerId: inv!.id } as AvailabilitySlot;
             await fetch(`/api/slots/${updatedSlot.id}`, {
                method: 'PUT',
@@ -320,14 +304,6 @@ const App: React.FC = () => {
     setIsSaving(true);
     try {
       if (editingSlot && isSplitRequest) {
-         // This is a "delete the middle" operation which is actually:
-         // 1. Delete original
-         // 2. Create 2 new slots (before and after)
-         // OR
-         // 1. Resize original to "before"
-         // 2. Create new slot "after"
-         // Let's go with robust: Delete original, Create two new ones.
-         
          const existingSlot = slots.find(s => s.id === id);
          if (existingSlot) {
             const oldStart = timeToMins(existingSlot.startTime);
@@ -340,10 +316,8 @@ const App: React.FC = () => {
                if (targetStart > oldStart) slotsToAdd.push({ ...existingSlot, id: crypto.randomUUID(), endTime: editingSlot.startTime });
                if (targetEnd < oldEnd) slotsToAdd.push({ ...existingSlot, id: crypto.randomUUID(), startTime: editingSlot.endTime });
                
-               // API: Delete Original
                await fetch(`/api/slots/${id}`, { method: 'DELETE' });
                
-               // API: Add New
                if (slotsToAdd.length > 0) {
                   await fetch('/api/slots/batch', {
                     method: 'POST',
@@ -352,12 +326,10 @@ const App: React.FC = () => {
                   });
                }
 
-               // Local Update
                setSlots(prev => prev.filter(s => s.id !== id).concat(slotsToAdd));
             }
          }
       } else {
-         // Standard Delete
          await fetch(`/api/slots/${id}`, { method: 'DELETE' });
          setSlots(prev => prev.filter(s => s.id !== id));
       }
@@ -375,15 +347,12 @@ const App: React.FC = () => {
     setIsSaving(true);
     try {
       const newNote: DayNote = { date, content, color: color as NoteColor };
-      
-      // API Upsert Note
       await fetch('/api/notes', {
          method: 'POST',
          headers: { 'Content-Type': 'application/json' },
          body: JSON.stringify(newNote)
       });
 
-      // Local Update
       setDayNotes(prev => {
          const filtered = prev.filter(n => n.date !== date);
          return content.trim() ? [...filtered, newNote] : filtered;
@@ -412,8 +381,6 @@ const App: React.FC = () => {
     setIsNoteModalOpen(true);
   };
 
-  const getNoteForDate = (date: Date) => dayNotes.find(n => n.date === format(date, 'yyyy-MM-dd'));
-
   const toggleInterviewerFilter = (id: string) => {
     setSelectedInterviewerIds(prev => {
       const next = new Set(prev);
@@ -427,6 +394,9 @@ const App: React.FC = () => {
     const seen = new Set();
     const activeIds = new Set<string>();
     slots.forEach(s => {
+      // Defensive check for missing date (caused blank screen)
+      if (!s.date) return;
+      
       const sDate = parse(s.date, 'yyyy-MM-dd', new Date());
       if (isValid(sDate) && isSameMonth(sDate, currentDate)) activeIds.add(s.interviewerId);
     });

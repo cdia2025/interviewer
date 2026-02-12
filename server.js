@@ -53,7 +53,8 @@ async function findRowIndexById(sheetName, id) {
   const rows = response.data.values || [];
   // Arrays are 0-indexed, Sheets rows are 1-indexed. 
   // API responses map index 0 to Row 1.
-  const index = rows.findIndex(row => row[0] === id);
+  // Ensure we compare strings
+  const index = rows.findIndex(row => String(row[0]).trim() === String(id).trim());
   return index; // Returns -1 if not found, or 0-based index (Row 1 = index 0)
 }
 
@@ -92,17 +93,24 @@ app.get('/api/data', async (req, res) => {
     const invRows = response.data.valueRanges[1].values || [];
     const noteRows = response.data.valueRanges[2].values || [];
 
-    const slots = slotRows.slice(1).map(r => ({
-      id: r[0], interviewerId: r[1], date: r[2], startTime: r[3], endTime: r[4], isBooked: r[5] === 'true'
-    }));
+    // Filter out rows that don't have an ID or Date to prevent frontend crashes
+    const slots = slotRows.slice(1)
+      .map(r => ({
+        id: r[0], interviewerId: r[1], date: r[2], startTime: r[3], endTime: r[4], isBooked: r[5] === 'true'
+      }))
+      .filter(s => s.id && s.date);
 
-    const interviewers = invRows.slice(1).map(r => ({
-      id: r[0], name: r[1], color: r[2]
-    }));
+    const interviewers = invRows.slice(1)
+      .map(r => ({
+        id: r[0], name: r[1], color: r[2]
+      }))
+      .filter(i => i.id && i.name);
 
-    const notes = noteRows.slice(1).map(r => ({
-      date: r[0], content: r[1], color: r[2]
-    }));
+    const notes = noteRows.slice(1)
+      .map(r => ({
+        date: r[0], content: r[1], color: r[2]
+      }))
+      .filter(n => n.date);
 
     res.json({ slots, interviewers, notes });
   } catch (error) {
@@ -194,27 +202,34 @@ app.put('/api/slots/:id', async (req, res) => {
 app.delete('/api/slots/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const rowIndex = await findRowIndexById('Slots', id);
-    
-    if (rowIndex !== -1) {
-      const sheetId = await getSheetIdByTitle('Slots');
-      if (sheetId === null) throw new Error("Sheet not found");
+    const sheetId = await getSheetIdByTitle('Slots');
+    if (sheetId === null) throw new Error("Sheet not found");
 
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: SPREADSHEET_ID,
-        requestBody: {
-          requests: [{
-            deleteDimension: {
-              range: {
-                sheetId: sheetId,
-                dimension: 'ROWS',
-                startIndex: rowIndex,
-                endIndex: rowIndex + 1
-              }
+    // Loop to delete duplicates if any exist
+    // This fixes the issue where deleting once leaves a duplicate behind
+    let found = true;
+    while (found) {
+        const rowIndex = await findRowIndexById('Slots', id);
+        
+        if (rowIndex !== -1) {
+          await sheets.spreadsheets.batchUpdate({
+            spreadsheetId: SPREADSHEET_ID,
+            requestBody: {
+              requests: [{
+                deleteDimension: {
+                  range: {
+                    sheetId: sheetId,
+                    dimension: 'ROWS',
+                    startIndex: rowIndex,
+                    endIndex: rowIndex + 1
+                  }
+                }
+              }]
             }
-          }]
+          });
+        } else {
+            found = false;
         }
-      });
     }
     res.json({ success: true });
   } catch (e) {
