@@ -6,7 +6,7 @@ import { DayNote } from '../types';
 interface NoteEditorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (date: string, content: string, color: string) => void;
+  onSave: (date: string, content: string, color: 'yellow' | 'blue' | 'green' | 'red' | 'purple') => void;
   onDelete?: (date: string) => void;
   date: Date | null;
   initialNote?: DayNote;
@@ -29,7 +29,7 @@ export const NoteEditorModal: React.FC<NoteEditorModalProps> = ({
   initialNote
 }) => {
   const [content, setContent] = useState('');
-  const [selectedColor, setSelectedColor] = useState<string>('yellow');
+  const [selectedColor, setSelectedColor] = useState<'yellow' | 'blue' | 'green' | 'red' | 'purple'>('yellow');
 
   useEffect(() => {
     if (isOpen) {
