@@ -293,18 +293,15 @@ const App: React.FC = () => {
 
   const pasteNote = (date: Date) => {
     if (clipboardNote) {
-       const validColors = ['yellow', 'blue', 'green', 'red', 'purple'];
-       const rawColor = clipboardNote.color;
-       
-       // Explicitly default to 'yellow'
-       let noteColor: NoteColor = 'yellow';
-       
-       // Safe check: Ensure rawColor exists and is included in the valid list
-       if (rawColor && validColors.includes(rawColor)) {
-          noteColor = rawColor as NoteColor;
-       }
-       
-       handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
+      const validColors: NoteColor[] = ['yellow', 'blue', 'green', 'red', 'purple'];
+      const rawColor = clipboardNote.color;
+      
+      // Use strict type casting to ensure TS understands the flow
+      const noteColor: NoteColor = (rawColor && validColors.includes(rawColor as NoteColor)) 
+        ? (rawColor as NoteColor) 
+        : 'yellow';
+      
+      handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
     }
   };
 
