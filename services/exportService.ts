@@ -75,52 +75,57 @@ export const exportToExcel = (
   const calendarSheet = XLSX.utils.aoa_to_sheet(calendarSheetData);
   
   // --- Styling Logic ---
-  const range = XLSX.utils.decode_range(calendarSheet['!ref']);
+  const sheetRef = calendarSheet['!ref'];
   
-  const borderStyle = {
-    top: { style: "thin", color: { rgb: "000000" } },
-    bottom: { style: "thin", color: { rgb: "000000" } },
-    left: { style: "thin", color: { rgb: "000000" } },
-    right: { style: "thin", color: { rgb: "000000" } }
-  };
-
-  const titleStyle = {
-    font: { sz: 14, bold: true, name: "Arial" },
-    alignment: { horizontal: "center", vertical: "center" }
-  };
-
-  const headerStyle = {
-    fill: { fgColor: { rgb: "EFEFEF" } }, // Light Gray
-    font: { bold: true, name: "Arial" },
-    border: borderStyle,
-    alignment: { horizontal: "center", vertical: "center" }
-  };
-
-  const cellStyle = {
-    border: borderStyle,
-    alignment: { vertical: "top", wrapText: true, horizontal: "left" },
-    font: { name: "Arial", sz: 10 }
-  };
-
-  for (let R = range.s.r; R <= range.e.r; ++R) {
-    for (let C = range.s.c; C <= range.e.c; ++C) {
-      const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+  // Only apply styling if we have a valid range
+  if (sheetRef) {
+      const range = XLSX.utils.decode_range(sheetRef);
       
-      // Ensure cell exists to apply border
-      if (!calendarSheet[cellAddress]) {
-        calendarSheet[cellAddress] = { t: 's', v: '' };
-      }
-      
-      const cell = calendarSheet[cellAddress];
+      const borderStyle = {
+        top: { style: "thin", color: { rgb: "000000" } },
+        bottom: { style: "thin", color: { rgb: "000000" } },
+        left: { style: "thin", color: { rgb: "000000" } },
+        right: { style: "thin", color: { rgb: "000000" } }
+      };
 
-      if (R === 0) {
-        cell.s = titleStyle;
-      } else if (R === 1) {
-        cell.s = headerStyle;
-      } else {
-        cell.s = cellStyle;
+      const titleStyle = {
+        font: { sz: 14, bold: true, name: "Arial" },
+        alignment: { horizontal: "center", vertical: "center" }
+      };
+
+      const headerStyle = {
+        fill: { fgColor: { rgb: "EFEFEF" } }, // Light Gray
+        font: { bold: true, name: "Arial" },
+        border: borderStyle,
+        alignment: { horizontal: "center", vertical: "center" }
+      };
+
+      const cellStyle = {
+        border: borderStyle,
+        alignment: { vertical: "top", wrapText: true, horizontal: "left" },
+        font: { name: "Arial", sz: 10 }
+      };
+
+      for (let R = range.s.r; R <= range.e.r; ++R) {
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+          const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+          
+          // Ensure cell exists to apply border
+          if (!calendarSheet[cellAddress]) {
+            calendarSheet[cellAddress] = { t: 's', v: '' };
+          }
+          
+          const cell = calendarSheet[cellAddress];
+
+          if (R === 0) {
+            cell.s = titleStyle;
+          } else if (R === 1) {
+            cell.s = headerStyle;
+          } else {
+            cell.s = cellStyle;
+          }
+        }
       }
-    }
   }
 
   // Column widths
