@@ -293,13 +293,12 @@ const App: React.FC = () => {
 
   const pasteNote = (date: Date) => {
     if (clipboardNote) {
+      // Use strict type casting with valid color check as requested
       const validColors: NoteColor[] = ['yellow', 'blue', 'green', 'red', 'purple'];
-      const rawColor = clipboardNote.color;
-      
-      const noteColor: NoteColor = (rawColor && validColors.includes(rawColor as NoteColor)) 
-        ? (rawColor as NoteColor) 
+      const noteColor = (clipboardNote.color && validColors.includes(clipboardNote.color as NoteColor)) 
+        ? clipboardNote.color as NoteColor 
         : 'yellow';
-      
+        
       handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
     }
   };
