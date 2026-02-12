@@ -1,24 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from './Button';
 import { format } from 'date-fns';
-import { DayNote } from '../types';
+import { DayNote, NoteColor } from '../types';
 
 interface NoteEditorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (date: string, content: string, color: 'yellow' | 'blue' | 'green' | 'red' | 'purple') => void;
+  onSave: (date: string, content: string, color: NoteColor) => void;
   onDelete?: (date: string) => void;
   date: Date | null;
   initialNote?: DayNote;
 }
 
-const COLORS = [
+const COLORS: { id: NoteColor; bg: string; ring: string; label: string }[] = [
   { id: 'yellow', bg: 'bg-yellow-100', ring: 'ring-yellow-400', label: '黃' },
   { id: 'blue', bg: 'bg-blue-100', ring: 'ring-blue-400', label: '藍' },
   { id: 'green', bg: 'bg-emerald-100', ring: 'ring-emerald-400', label: '綠' },
   { id: 'red', bg: 'bg-red-100', ring: 'ring-red-400', label: '紅' },
   { id: 'purple', bg: 'bg-purple-100', ring: 'ring-purple-400', label: '紫' },
-] as const;
+];
 
 export const NoteEditorModal: React.FC<NoteEditorModalProps> = ({
   isOpen,
@@ -29,7 +29,7 @@ export const NoteEditorModal: React.FC<NoteEditorModalProps> = ({
   initialNote
 }) => {
   const [content, setContent] = useState('');
-  const [selectedColor, setSelectedColor] = useState<'yellow' | 'blue' | 'green' | 'red' | 'purple'>('yellow');
+  const [selectedColor, setSelectedColor] = useState<NoteColor>('yellow');
 
   useEffect(() => {
     if (isOpen) {
