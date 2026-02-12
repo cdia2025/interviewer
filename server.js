@@ -18,6 +18,16 @@ const auth = new google.auth.GoogleAuth({
 const sheets = google.sheets({ version: 'v4', auth });
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
+// --- Cache ---
+let cachedData = null;
+let lastCacheTime = 0;
+const CACHE_TTL = 30 * 1000; // 30 seconds
+
+const invalidateCache = () => {
+  cachedData = null;
+  lastCacheTime = 0;
+};
+
 async function ensureTabs() {
   try {
     const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
@@ -44,20 +54,16 @@ async function ensureTabs() {
 
 // --- Helper Functions ---
 
-// Find row index by ID (Column A) in a specific sheet
 async function findRowIndexById(sheetName, id) {
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: `${sheetName}!A:A`, 
   });
   const rows = response.data.values || [];
-  // Arrays are 0-indexed, Sheets rows are 1-indexed. 
-  // API responses map index 0 to Row 1.
-  const index = rows.findIndex(row => row[0] === id);
-  return index; // Returns -1 if not found, or 0-based index (Row 1 = index 0)
+  const index = rows.findIndex(row => String(row[0]).trim() === String(id).trim());
+  return index;
 }
 
-// Find row index by Date (Column A) for Notes
 async function findRowIndexByDate(sheetName, dateStr) {
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
@@ -68,7 +74,6 @@ async function findRowIndexByDate(sheetName, dateStr) {
   return index;
 }
 
-// Get Sheet ID by Title (needed for deleteDimension)
 async function getSheetIdByTitle(title) {
   const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
   const sheet = meta.data.sheets.find(s => s.properties.title === title);
@@ -82,6 +87,12 @@ app.get('/api/data', async (req, res) => {
   try {
     if (!SPREADSHEET_ID) throw new Error("Missing SPREADSHEET_ID");
     
+    // Check Cache
+    const now = Date.now();
+    if (cachedData && (now - lastCacheTime < CACHE_TTL)) {
+       return res.json(cachedData);
+    }
+    
     const ranges = ['Slots!A:F', 'Interviewers!A:C', 'Notes!A:C'];
     const response = await sheets.spreadsheets.values.batchGet({
       spreadsheetId: SPREADSHEET_ID,
@@ -92,19 +103,31 @@ app.get('/api/data', async (req, res) => {
     const invRows = response.data.valueRanges[1].values || [];
     const noteRows = response.data.valueRanges[2].values || [];
 
-    const slots = slotRows.slice(1).map(r => ({
-      id: r[0], interviewerId: r[1], date: r[2], startTime: r[3], endTime: r[4], isBooked: r[5] === 'true'
-    }));
+    const slots = slotRows.slice(1)
+      .map(r => ({
+        id: r[0], interviewerId: r[1], date: r[2], startTime: r[3], endTime: r[4], isBooked: r[5] === 'true'
+      }))
+      .filter(s => s.id && s.date); 
 
-    const interviewers = invRows.slice(1).map(r => ({
-      id: r[0], name: r[1], color: r[2]
-    }));
+    const interviewers = invRows.slice(1)
+      .map(r => ({
+        id: r[0], name: r[1], color: r[2]
+      }))
+      .filter(i => i.id && i.name);
 
-    const notes = noteRows.slice(1).map(r => ({
-      date: r[0], content: r[1], color: r[2]
-    }));
+    const notes = noteRows.slice(1)
+      .map(r => ({
+        date: r[0], content: r[1], color: r[2]
+      }))
+      .filter(n => n.date);
 
-    res.json({ slots, interviewers, notes });
+    const result = { slots, interviewers, notes };
+    
+    // Update Cache
+    cachedData = result;
+    lastCacheTime = now;
+
+    res.json(result);
   } catch (error) {
     console.error('Sheet Read Error:', error);
     res.status(500).json({ error: error.message, slots: [], interviewers: [], notes: [] });
@@ -115,8 +138,8 @@ app.get('/api/data', async (req, res) => {
 
 // 1. Slots Operations
 
-// ADD Slot (Single)
 app.post('/api/slots', async (req, res) => {
+  invalidateCache();
   try {
     const s = req.body;
     const values = [[s.id, s.interviewerId, s.date, s.startTime, s.endTime, s.isBooked]];
@@ -134,10 +157,10 @@ app.post('/api/slots', async (req, res) => {
   }
 });
 
-// ADD Slots (Batch)
 app.post('/api/slots/batch', async (req, res) => {
+  invalidateCache();
   try {
-    const slots = req.body; // Array of slots
+    const slots = req.body;
     if (!slots || slots.length === 0) return res.json({ success: true });
 
     const values = slots.map(s => [s.id, s.interviewerId, s.date, s.startTime, s.endTime, s.isBooked]);
@@ -155,15 +178,14 @@ app.post('/api/slots/batch', async (req, res) => {
   }
 });
 
-// UPDATE Slot
 app.put('/api/slots/:id', async (req, res) => {
+  invalidateCache();
   try {
     const { id } = req.params;
     const s = req.body;
     const rowIndex = await findRowIndexById('Slots', id);
 
     if (rowIndex === -1) {
-      // If not found, create it (fallback)
       const values = [[s.id, s.interviewerId, s.date, s.startTime, s.endTime, s.isBooked]];
       await sheets.spreadsheets.values.append({
         spreadsheetId: SPREADSHEET_ID,
@@ -172,7 +194,6 @@ app.put('/api/slots/:id', async (req, res) => {
         requestBody: { values }
       });
     } else {
-      // Update specific row (Row index 0 is A1, so rowIndex + 1)
       const range = `Slots!A${rowIndex + 1}:F${rowIndex + 1}`;
       const values = [[s.id, s.interviewerId, s.date, s.startTime, s.endTime, s.isBooked]];
       
@@ -190,31 +211,35 @@ app.put('/api/slots/:id', async (req, res) => {
   }
 });
 
-// DELETE Slot
 app.delete('/api/slots/:id', async (req, res) => {
+  invalidateCache();
   try {
     const { id } = req.params;
-    const rowIndex = await findRowIndexById('Slots', id);
-    
-    if (rowIndex !== -1) {
-      const sheetId = await getSheetIdByTitle('Slots');
-      if (sheetId === null) throw new Error("Sheet not found");
+    const sheetId = await getSheetIdByTitle('Slots');
+    if (sheetId === null) throw new Error("Sheet not found");
 
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: SPREADSHEET_ID,
-        requestBody: {
-          requests: [{
-            deleteDimension: {
-              range: {
-                sheetId: sheetId,
-                dimension: 'ROWS',
-                startIndex: rowIndex,
-                endIndex: rowIndex + 1
-              }
+    let found = true;
+    while (found) {
+        const rowIndex = await findRowIndexById('Slots', id);
+        if (rowIndex !== -1) {
+          await sheets.spreadsheets.batchUpdate({
+            spreadsheetId: SPREADSHEET_ID,
+            requestBody: {
+              requests: [{
+                deleteDimension: {
+                  range: {
+                    sheetId: sheetId,
+                    dimension: 'ROWS',
+                    startIndex: rowIndex,
+                    endIndex: rowIndex + 1
+                  }
+                }
+              }]
             }
-          }]
+          });
+        } else {
+            found = false;
         }
-      });
     }
     res.json({ success: true });
   } catch (e) {
@@ -223,16 +248,15 @@ app.delete('/api/slots/:id', async (req, res) => {
   }
 });
 
-// 2. Notes Operations (Keyed by Date)
+// 2. Notes Operations
 
-// UPSERT Note
 app.post('/api/notes', async (req, res) => {
+  invalidateCache();
   try {
     const n = req.body;
     const rowIndex = await findRowIndexByDate('Notes', n.date);
 
     if (rowIndex === -1) {
-      // Create new
       const values = [[n.date, n.content, n.color]];
       await sheets.spreadsheets.values.append({
         spreadsheetId: SPREADSHEET_ID,
@@ -241,7 +265,6 @@ app.post('/api/notes', async (req, res) => {
         requestBody: { values }
       });
     } else {
-      // Update existing
       const range = `Notes!A${rowIndex + 1}:C${rowIndex + 1}`;
       const values = [[n.date, n.content, n.color]];
       await sheets.spreadsheets.values.update({
@@ -258,8 +281,8 @@ app.post('/api/notes', async (req, res) => {
   }
 });
 
-// DELETE Note
 app.delete('/api/notes/:date', async (req, res) => {
+  invalidateCache();
   try {
     const { date } = req.params;
     const rowIndex = await findRowIndexByDate('Notes', date);
@@ -291,8 +314,8 @@ app.delete('/api/notes/:date', async (req, res) => {
 
 // 3. Interviewers Operations
 
-// UPSERT Interviewer (If ID exists update, else add. Simplified to Add if not exists)
 app.post('/api/interviewers', async (req, res) => {
+  invalidateCache();
   try {
     const inv = req.body;
     const rowIndex = await findRowIndexById('Interviewers', inv.id);
@@ -306,7 +329,6 @@ app.post('/api/interviewers', async (req, res) => {
          requestBody: { values }
        });
     } else {
-       // Optional: Update name/color if it changes, but for now we assume they are static or low freq
        const range = `Interviewers!A${rowIndex + 1}:C${rowIndex + 1}`;
        const values = [[inv.id, inv.name, inv.color]];
        await sheets.spreadsheets.values.update({
@@ -323,39 +345,18 @@ app.post('/api/interviewers', async (req, res) => {
   }
 });
 
-
-// API: DeepSeek Proxy
 app.post('/api/ai-parse', async (req, res) => {
   try {
     const { text, currentYear } = req.body;
     const apiKey = process.env.DEEPSEEK_API_KEY;
-    
     if (!apiKey) return res.status(500).json({ error: "DeepSeek API Key not configured" });
 
-    // Enhanced Prompt for complex parsing
     const systemPrompt = `
       You are a specialized scheduling assistant. 
       Your Task: Extract interviewer availability from unstructured text.
       Current Year: ${currentYear}.
-      
-      Input Scenarios:
-      1. Single person: "John 5/12 10-12"
-      2. Multiple people: "Alex: 5/12 9am-11am, Sarah: 5/13 2pm-4pm"
-      3. Implicit Name: "5/12 10:00-12:00" (If no name found, use "Unknown")
-      4. Month/Day handling: Parse "5月12日", "5/12", "May 12th".
-
-      Output Format:
-      Strictly a JSON array of objects. NO markdown formatting, NO backticks.
-      [
-        { "interviewerName": "Name", "date": "YYYY-MM-DD", "startTime": "HH:mm", "endTime": "HH:mm" }
-      ]
-
-      Rules:
-      1. Time: Convert all times to 24-hour format (HH:mm). e.g., "2pm" -> "14:00".
-      2. Date: Use the Current Year (${currentYear}) unless specified. Format YYYY-MM-DD.
-      3. Multiple Slots: If a person has multiple times, create separate objects.
-      4. Name Persistence: If a line starts with a name, apply it to all following times until a new name appears.
-      5. Do not hallucinate. If info is missing, do your best or omit.
+      Output Format: Strictly a JSON array of objects. NO markdown.
+      [ { "interviewerName": "Name", "date": "YYYY-MM-DD", "startTime": "HH:mm", "endTime": "HH:mm" } ]
     `;
 
     const response = await axios.post('https://api.deepseek.com/chat/completions', {
@@ -367,29 +368,15 @@ app.post('/api/ai-parse', async (req, res) => {
       stream: false,
       response_format: { type: "json_object" } 
     }, {
-      headers: { 
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      }
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
     });
 
     const content = response.data.choices[0].message.content;
     const cleanJson = content.replace(/```json/g, '').replace(/```/g, '').trim();
-    
-    let parsed;
-    try {
-        parsed = JSON.parse(cleanJson);
-        if (!Array.isArray(parsed) && parsed.interviewers) parsed = parsed.interviewers;
-        if (!Array.isArray(parsed) && parsed.slots) parsed = parsed.slots;
-        if (!Array.isArray(parsed)) {
-            const values = Object.values(parsed);
-            const foundArray = values.find(v => Array.isArray(v));
-            parsed = foundArray || [];
-        }
-    } catch (e) {
-        console.error("JSON Parse Error", e);
-        throw e;
-    }
+    let parsed = JSON.parse(cleanJson);
+    if (!Array.isArray(parsed) && parsed.interviewers) parsed = parsed.interviewers;
+    if (!Array.isArray(parsed) && parsed.slots) parsed = parsed.slots;
+    if (!Array.isArray(parsed)) parsed = Object.values(parsed).find(v => Array.isArray(v)) || [];
 
     res.json(parsed);
 
@@ -399,10 +386,7 @@ app.post('/api/ai-parse', async (req, res) => {
   }
 });
 
-// Serve static files from 'dist' (Vite build output)
 app.use(express.static(path.join(__dirname, 'dist')));
-
-// Handle React Routing (SPA fallback)
 app.get('*', (req, res) => {
   if (!req.path.startsWith('/api')) {
       res.sendFile(path.join(__dirname, 'dist', 'index.html'));

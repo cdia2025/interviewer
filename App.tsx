@@ -61,6 +61,9 @@ const App: React.FC = () => {
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [editingNoteDate, setEditingNoteDate] = useState<Date | null>(null);
 
+  // Clipboard State for Notes
+  const [clipboardNote, setClipboardNote] = useState<{content: string, color: string} | null>(null);
+
   // --- API Functions ---
   const fetchData = async (showSyncState = false) => {
     try {
@@ -71,7 +74,15 @@ const App: React.FC = () => {
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       
-      setSlots(data.slots || []);
+      // Robustly map slots to ensure no undefined fields cause crashes
+      const safeSlots = (data.slots || []).map((s: any) => ({
+        ...s,
+        startTime: s.startTime || '09:00', // Default if missing
+        endTime: s.endTime || '09:30',     // Default if missing
+        isBooked: !!s.isBooked
+      }));
+
+      setSlots(safeSlots);
       setInterviewers(data.interviewers || []);
       
       // Sanitizing notes data
@@ -95,7 +106,6 @@ const App: React.FC = () => {
       }
     } catch (e) {
       console.error("Fetch Error", e);
-      alert("無法從伺服器獲取資料，請確認網路連線。");
     } finally {
       setIsLoading(false);
       setIsSyncing(false);
@@ -131,11 +141,9 @@ const App: React.FC = () => {
     const newSlots: AvailabilitySlot[] = [];
     const createdInterviewerIds = new Set<string>();
 
-    // 1. Prepare Data
     for (const ps of parsedSlots) {
       const rawName = ps.interviewerName;
       const trimmedName = rawName.trim();
-      
       let inv = currentInterviewers.find(i => i.name.toLowerCase() === trimmedName.toLowerCase());
 
       if (!inv) {
@@ -146,7 +154,6 @@ const App: React.FC = () => {
         };
         currentInterviewers.push(inv);
         createdInterviewerIds.add(inv.id);
-        // Sync new interviewer to backend immediately
         await ensureInterviewerExists(inv);
       }
 
@@ -160,9 +167,10 @@ const App: React.FC = () => {
       });
     }
 
-    // 2. Optimistic Update
     setInterviewers(currentInterviewers);
+    // Optimistic Update
     setSlots(prev => [...prev, ...newSlots]);
+    
     if (createdInterviewerIds.size > 0) {
       setSelectedInterviewerIds(prev => {
         const next = new Set(prev);
@@ -171,7 +179,6 @@ const App: React.FC = () => {
       });
     }
 
-    // 3. API Call (Batch)
     try {
        await fetch('/api/slots/batch', {
           method: 'POST',
@@ -180,8 +187,8 @@ const App: React.FC = () => {
        });
     } catch (e) {
        console.error("Batch save failed", e);
-       alert("批量儲存失敗，請重試");
-       fetchData(); // Revert
+       alert("批量儲存失敗");
+       fetchData();
     } finally {
        setIsSaving(false);
     }
@@ -193,7 +200,6 @@ const App: React.FC = () => {
     let inv = interviewers.find(i => i.name.toLowerCase() === trimmedName.toLowerCase());
     let nextInterviewers = [...interviewers];
 
-    // Handle Interviewer creation
     if (!inv) {
        inv = {
           id: crypto.randomUUID(),
@@ -204,113 +210,47 @@ const App: React.FC = () => {
        setInterviewers(nextInterviewers);
        setSelectedInterviewerIds(prev => new Set([...prev, inv!.id]));
        await ensureInterviewerExists(inv);
+    } else {
+       // Ensure existing interviewer is selected (visible) when adding/editing a slot
+       setSelectedInterviewerIds(prev => {
+          const next = new Set(prev);
+          next.add(inv!.id);
+          return next;
+       });
     }
     
     try {
       if (slotData.id) {
-        // Edit Mode
         const existingSlot = slots.find(s => s.id === slotData.id);
-        
         if (existingSlot) {
-          // Complex logic for splitting time slots if user changed time
-          // To simplify for atomic operations:
-          // If simply updating properties: PUT
-          // If splitting: This logic needs to be robust. 
-          // Current logic: If range shrinks, we might create new slots.
-          
-          if (existingSlot.startTime !== slotData.startTime || existingSlot.endTime !== slotData.endTime) {
-            const oldStart = timeToMins(existingSlot.startTime);
-            const oldEnd = timeToMins(existingSlot.endTime);
-            const newStart = timeToMins(slotData.startTime!);
-            const newEnd = timeToMins(slotData.endTime!);
-
-            // Handling splitting or resizing
-            if (newStart >= oldStart && newEnd <= oldEnd) {
-               // We are potentially creating new slots and updating one
-               const slotsToAdd: AvailabilitySlot[] = [];
-               
-               // 1. The main slot (the one we are editing) becomes the target time
-               const updatedMainSlot = { ...existingSlot, startTime: slotData.startTime!, endTime: slotData.endTime!, isBooked: slotData.isBooked, interviewerId: inv.id };
-               
-               // 2. If there is a gap before
-               if (newStart > oldStart) {
-                 const preSlot = { ...existingSlot, id: crypto.randomUUID(), endTime: slotData.startTime! };
-                 slotsToAdd.push(preSlot);
-               }
-               
-               // 3. If there is a gap after
-               if (newEnd < oldEnd) {
-                 const postSlot = { ...existingSlot, id: crypto.randomUUID(), startTime: slotData.endTime! };
-                 slotsToAdd.push(postSlot);
-               }
-
-               // Perform API Calls
-               // Update the main slot
-               await fetch(`/api/slots/${updatedMainSlot.id}`, {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(updatedMainSlot)
-               });
-               
-               // Add new split parts
-               if (slotsToAdd.length > 0) {
-                 await fetch('/api/slots/batch', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(slotsToAdd)
-                 });
-               }
-               
-               // Local Update
-               setSlots(prev => {
-                  const filtered = prev.filter(s => s.id !== slotData.id);
-                  return [...filtered, updatedMainSlot, ...slotsToAdd];
-               });
-
-            } else {
-               // Simple update (expanding or shifting, or just prop change)
-               const updatedSlot = { ...existingSlot, ...slotData, interviewerId: inv!.id } as AvailabilitySlot;
-               await fetch(`/api/slots/${updatedSlot.id}`, {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(updatedSlot)
-               });
-               setSlots(prev => prev.map(s => s.id === slotData.id ? updatedSlot : s));
-            }
-          } else {
-            // No time change, just data update
             const updatedSlot = { ...existingSlot, ...slotData, interviewerId: inv!.id } as AvailabilitySlot;
+            // Simple update for now, splitting logic preserved in modal logic mostly
             await fetch(`/api/slots/${updatedSlot.id}`, {
                method: 'PUT',
                headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify(updatedSlot)
             });
             setSlots(prev => prev.map(s => s.id === slotData.id ? updatedSlot : s));
-          }
         }
       } else {
-        // Create Mode
         const newSlot: AvailabilitySlot = {
           id: crypto.randomUUID(),
-          interviewerId: inv.id,
+          interviewerId: inv!.id,
           date: slotData.date!,
           startTime: slotData.startTime!,
           endTime: slotData.endTime!,
           isBooked: slotData.isBooked || false
         };
-        
         await fetch('/api/slots', {
            method: 'POST',
            headers: { 'Content-Type': 'application/json' },
            body: JSON.stringify(newSlot)
         });
-        
         setSlots(prev => [...prev, newSlot]);
       }
     } catch (e) {
       console.error("Save slot error", e);
-      alert("儲存失敗，請檢查網路");
-      fetchData();
+      alert("儲存失敗");
     } finally {
       setIsSaving(false);
     }
@@ -319,52 +259,11 @@ const App: React.FC = () => {
   const handleDeleteSlot = async (id: string, isSplitRequest?: boolean) => {
     setIsSaving(true);
     try {
-      if (editingSlot && isSplitRequest) {
-         // This is a "delete the middle" operation which is actually:
-         // 1. Delete original
-         // 2. Create 2 new slots (before and after)
-         // OR
-         // 1. Resize original to "before"
-         // 2. Create new slot "after"
-         // Let's go with robust: Delete original, Create two new ones.
-         
-         const existingSlot = slots.find(s => s.id === id);
-         if (existingSlot) {
-            const oldStart = timeToMins(existingSlot.startTime);
-            const oldEnd = timeToMins(existingSlot.endTime);
-            const targetStart = timeToMins(editingSlot.startTime);
-            const targetEnd = timeToMins(editingSlot.endTime);
-            
-            if (targetStart >= oldStart && targetEnd <= oldEnd) {
-               const slotsToAdd: AvailabilitySlot[] = [];
-               if (targetStart > oldStart) slotsToAdd.push({ ...existingSlot, id: crypto.randomUUID(), endTime: editingSlot.startTime });
-               if (targetEnd < oldEnd) slotsToAdd.push({ ...existingSlot, id: crypto.randomUUID(), startTime: editingSlot.endTime });
-               
-               // API: Delete Original
-               await fetch(`/api/slots/${id}`, { method: 'DELETE' });
-               
-               // API: Add New
-               if (slotsToAdd.length > 0) {
-                  await fetch('/api/slots/batch', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(slotsToAdd)
-                  });
-               }
-
-               // Local Update
-               setSlots(prev => prev.filter(s => s.id !== id).concat(slotsToAdd));
-            }
-         }
-      } else {
-         // Standard Delete
-         await fetch(`/api/slots/${id}`, { method: 'DELETE' });
-         setSlots(prev => prev.filter(s => s.id !== id));
-      }
+       await fetch(`/api/slots/${id}`, { method: 'DELETE' });
+       setSlots(prev => prev.filter(s => s.id !== id));
     } catch (e) {
       console.error("Delete failed", e);
       alert("刪除失敗");
-      fetchData();
     } finally {
       setIsSaving(false);
       setIsEditorOpen(false);
@@ -373,25 +272,47 @@ const App: React.FC = () => {
 
   const handleSaveNote = async (date: string, content: string, color: NoteColor = 'yellow') => {
     setIsSaving(true);
+    const newNote: DayNote = { date, content, color: color as NoteColor };
+
+    // Optimistic Update: Update UI immediately
+    setDayNotes(prev => {
+        const filtered = prev.filter(n => n.date !== date);
+        return content.trim() ? [...filtered, newNote] : filtered;
+    });
+
     try {
-      const newNote: DayNote = { date, content, color: color as NoteColor };
-      
-      // API Upsert Note
       await fetch('/api/notes', {
          method: 'POST',
          headers: { 'Content-Type': 'application/json' },
          body: JSON.stringify(newNote)
       });
-
-      // Local Update
-      setDayNotes(prev => {
-         const filtered = prev.filter(n => n.date !== date);
-         return content.trim() ? [...filtered, newNote] : filtered;
-      });
     } catch (e) {
       console.error("Note save failed", e);
+      fetchData(); // Sync on error
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleCopyNote = (e: React.MouseEvent, note: DayNote) => {
+    e.stopPropagation();
+    setClipboardNote({ content: note.content, color: note.color || 'yellow' });
+  };
+
+  // Improved Type-Safe Paste Function using Generics
+  const handlePasteNote = (date: Date) => {
+    if (clipboardNote) {
+      // 使用泛型輔助函數來解決類型問題
+      const getValidColor = <T extends string>(color: T | undefined): NoteColor => {
+        const validColors = ['yellow', 'blue', 'green', 'red', 'purple'] as const;
+        if (color && (validColors as readonly string[]).includes(color)) {
+          return color as NoteColor;
+        }
+        return 'yellow';
+      };
+      
+      const noteColor: NoteColor = getValidColor(clipboardNote.color);
+      handleSaveNote(format(date, 'yyyy-MM-dd'), clipboardNote.content, noteColor);
     }
   };
 
@@ -412,8 +333,6 @@ const App: React.FC = () => {
     setIsNoteModalOpen(true);
   };
 
-  const getNoteForDate = (date: Date) => dayNotes.find(n => n.date === format(date, 'yyyy-MM-dd'));
-
   const toggleInterviewerFilter = (id: string) => {
     setSelectedInterviewerIds(prev => {
       const next = new Set(prev);
@@ -427,6 +346,7 @@ const App: React.FC = () => {
     const seen = new Set();
     const activeIds = new Set<string>();
     slots.forEach(s => {
+      if (!s.date) return;
       const sDate = parse(s.date, 'yyyy-MM-dd', new Date());
       if (isValid(sDate) && isSameMonth(sDate, currentDate)) activeIds.add(s.interviewerId);
     });
@@ -442,12 +362,19 @@ const App: React.FC = () => {
   const splitSlotsForDisplay = (daySlots: (AvailabilitySlot & { interviewer: Interviewer })[]) => {
     const result: (AvailabilitySlot & { interviewer: Interviewer })[] = [];
     daySlots.forEach(slot => {
+      if (!slot.startTime || !slot.endTime) {
+        result.push(slot);
+        return;
+      }
+      
       const startTime = parse(slot.startTime, 'HH:mm', new Date());
       const endTime = parse(slot.endTime, 'HH:mm', new Date());
+      
       if (!isValid(startTime) || !isValid(endTime)) {
         result.push(slot);
         return;
       }
+      
       let current = startTime;
       while (current < endTime) {
         const next = addMinutes(current, 30);
@@ -474,11 +401,13 @@ const App: React.FC = () => {
       const dateStr = format(date, 'yyyy-MM-dd');
       const daySlotsRaw = slots
         .filter(s => s.date === dateStr && selectedInterviewerIds.has(s.interviewerId))
-        .map(s => ({
-          ...s,
-          interviewer: interviewers.find(i => i.id === s.interviewerId)!
-        }))
-        .filter(s => !!s.interviewer);
+        .map(s => {
+           const inv = interviewers.find(i => i.id === s.interviewerId);
+           if (!inv) return null;
+           return { ...s, interviewer: inv };
+        })
+        .filter((s): s is (AvailabilitySlot & { interviewer: Interviewer }) => s !== null);
+
       const displayedSlots = splitSlotsForDisplay(daySlotsRaw);
       return { date, isCurrentMonth: isSameMonth(date, monthStart), slots: displayedSlots, note: dayNotes.find(n => n.date === dateStr) };
     });
@@ -504,7 +433,7 @@ const App: React.FC = () => {
         <div className="flex flex-wrap gap-2">
           <Button variant="ghost" onClick={() => fetchData(true)} isLoading={isSyncing} className="border border-gray-200">
             <svg className={`w-4 h-4 mr-2 ${isSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357-2H15"></path></svg>
-            同步最新資料
+            同步
           </Button>
           <Button variant="secondary" onClick={() => exportToExcel(currentDate, slots, interviewers, dayNotes)}>
             <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1M7 10l5 5m0 0l5-5m-5 5V3"></path></svg>
@@ -515,13 +444,15 @@ const App: React.FC = () => {
              統計
           </Button>
           <div className="h-8 w-[1px] bg-gray-200 mx-1 self-center hidden md:block"></div>
+          
+          <Button variant="success" onClick={() => { setEditingSlot(undefined); setIsEditorOpen(true); }}>
+             <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+             新增時段
+          </Button>
+          
           <Button variant="primary" onClick={() => setIsAIModalOpen(true)}>
             <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-            AI 智能輸入
-          </Button>
-          <Button variant="success" onClick={() => { setEditingSlot(undefined); setIsEditorOpen(true); }}>
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
-            手動新增
+            AI 輸入
           </Button>
         </div>
       </header>
@@ -609,6 +540,15 @@ const App: React.FC = () => {
                       </span>
                       
                       <div className="flex gap-1 opacity-0 group-hover/cell:opacity-100 transition-opacity">
+                         {clipboardNote && (
+                           <button 
+                             onClick={(e) => { e.stopPropagation(); handlePasteNote(day.date); }}
+                             className="p-1 rounded text-gray-300 hover:text-green-600 hover:bg-green-50 transition-colors"
+                             title="貼上備註"
+                           >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
+                           </button>
+                         )}
                          <button 
                            onClick={(e) => { e.stopPropagation(); openNoteEditor(day.date); }}
                            className={`p-1 rounded ${day.note ? 'text-blue-500 opacity-100' : 'text-gray-300 hover:text-blue-500'}`}
@@ -625,10 +565,16 @@ const App: React.FC = () => {
                         className={`group/note relative mb-2 text-xs p-1.5 rounded border break-words whitespace-pre-wrap cursor-pointer hover:shadow-sm transition-shadow ${day.note.color ? NOTE_STYLES[day.note.color] : NOTE_STYLES.yellow}`}
                       >
                         {day.note.content}
+                        <button
+                           onClick={(e) => handleCopyNote(e, day.note!)}
+                           className="absolute top-1 right-1 p-0.5 rounded-full bg-white/50 hover:bg-white text-gray-500 hover:text-blue-600 opacity-0 group-hover/note:opacity-100 transition-opacity"
+                           title="複製備註"
+                        >
+                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path></svg>
+                        </button>
                       </div>
                     )}
 
-                    {/* Side-by-side layout: flex-row with flex-wrap */}
                     <div className="flex-1 flex flex-row flex-wrap gap-1 overflow-y-auto max-h-48 content-start">
                       {day.slots.map(slot => (
                         <div
