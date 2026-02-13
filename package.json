@@ -1,6 +1,6 @@
 {
   "name": "interviewer-scheduler",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "Interviewer Scheduler with Google Sheets and Gemini",
   "main": "server.js",
   "scripts": {
@@ -25,7 +25,7 @@
     "typescript": "^5.3.3",
     "vite": "^5.0.8",
     "@types/node": "^20.10.0",
-    "@google/genai": "^0.1.1"
+    "@google/genai": "latest"
   },
   "engines": {
     "node": ">=18.0.0"
