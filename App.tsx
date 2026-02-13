@@ -21,6 +21,7 @@ import { AIInputModal } from './components/AIInputModal';
 import { SlotEditorModal } from './components/SlotEditorModal';
 import { NoteEditorModal } from './components/NoteEditorModal';
 import { StatisticsModal } from './components/StatisticsModal';
+import { BatchAddModal } from './components/BatchAddModal';
 import { exportToExcel } from './services/exportService';
 
 const hexToRgba = (hex: string, alpha: number) => {
@@ -28,6 +29,23 @@ const hexToRgba = (hex: string, alpha: number) => {
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+// Robust UUID generator that works in all environments
+const generateUUID = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    try {
+      return crypto.randomUUID();
+    } catch(e) {
+      // Fallback if crypto.randomUUID throws (insecure contexts)
+    }
+  }
+  // Fallback
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
 };
 
 const NOTE_STYLES: Record<string, string> = {
@@ -55,6 +73,7 @@ const App: React.FC = () => {
   const [isAIModalOpen, setIsAIModalOpen] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
+  const [isBatchAddModalOpen, setIsBatchAddModalOpen] = useState(false);
   const [editingSlot, setEditingSlot] = useState<(AvailabilitySlot & { interviewer: Interviewer }) | undefined>();
   
   // Note Modal state
@@ -133,6 +152,7 @@ const App: React.FC = () => {
   }, []);
 
   const timeToMins = (t: string) => {
+    if (!t) return 0;
     const [h, m] = t.split(':').map(Number);
     return h * 60 + m;
   };
@@ -150,7 +170,7 @@ const App: React.FC = () => {
 
       if (!inv) {
         inv = {
-          id: crypto.randomUUID(),
+          id: generateUUID(),
           name: trimmedName,
           color: INTERVIEWER_COLORS[currentInterviewers.length % INTERVIEWER_COLORS.length]
         };
@@ -160,7 +180,7 @@ const App: React.FC = () => {
       }
 
       newSlots.push({
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         interviewerId: inv.id,
         date: ps.date,
         startTime: ps.startTime,
@@ -197,6 +217,66 @@ const App: React.FC = () => {
     }
   };
 
+  // New Function for Batch Manual Add
+  const handleBatchManualConfirm = async (data: { name: string; dates: string[]; timeRanges: { startTime: string; endTime: string }[] }) => {
+    setIsSaving(true);
+    let currentInterviewers = [...interviewers];
+    const trimmedName = data.name.trim();
+    
+    // 1. Find or Create Interviewer
+    let inv = currentInterviewers.find(i => i.name.toLowerCase() === trimmedName.toLowerCase());
+    let isNewInterviewer = false;
+
+    if (!inv) {
+      inv = {
+        id: generateUUID(),
+        name: trimmedName,
+        color: INTERVIEWER_COLORS[currentInterviewers.length % INTERVIEWER_COLORS.length]
+      };
+      currentInterviewers.push(inv);
+      isNewInterviewer = true;
+      await ensureInterviewerExists(inv);
+    }
+
+    // 2. Generate Slots
+    const newSlots: AvailabilitySlot[] = [];
+    data.dates.forEach(date => {
+      data.timeRanges.forEach(range => {
+        newSlots.push({
+          id: generateUUID(),
+          interviewerId: inv!.id,
+          date: date,
+          startTime: range.startTime,
+          endTime: range.endTime,
+          isBooked: false
+        });
+      });
+    });
+
+    // 3. Update State
+    setInterviewers(currentInterviewers);
+    setSlots(prev => [...prev, ...newSlots]);
+    
+    if (isNewInterviewer || !selectedInterviewerIds.has(inv.id)) {
+      setSelectedInterviewerIds(prev => new Set(prev).add(inv!.id));
+    }
+
+    // 4. API Call
+    try {
+       await fetch('/api/slots/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newSlots)
+       });
+    } catch (e) {
+       console.error("Batch manual save failed", e);
+       alert("批量儲存失敗");
+       fetchData();
+    } finally {
+       setIsSaving(false);
+    }
+  };
+
   const handleSaveSlot = async (slotData: Partial<AvailabilitySlot>, interviewerName: string) => {
     setIsSaving(true);
     const trimmedName = interviewerName.trim();
@@ -205,7 +285,7 @@ const App: React.FC = () => {
 
     if (!inv) {
        inv = {
-          id: crypto.randomUUID(),
+          id: generateUUID(),
           name: trimmedName,
           color: INTERVIEWER_COLORS[interviewers.length % INTERVIEWER_COLORS.length]
        };
@@ -222,32 +302,103 @@ const App: React.FC = () => {
        });
     }
     
-    // OPTIMIZATION: Optimistic updates to UI first, API call second.
-    // We DO NOT call fetchData() on success to save Cloud costs and latency.
-    
     try {
       if (slotData.id) {
         const existingSlot = slots.find(s => s.id === slotData.id);
         if (existingSlot) {
-            const updatedSlot = { ...existingSlot, ...slotData, interviewerId: inv!.id } as AvailabilitySlot;
-            
-            // Simple update - Optimization: Trust local state
-            setSlots(prev => prev.map(s => s.id === slotData.id ? updatedSlot : s));
+            // Check if we need to split the slot (e.g. Booking a sub-range)
+            const oldStart = timeToMins(existingSlot.startTime);
+            const oldEnd = timeToMins(existingSlot.endTime);
+            const newStart = slotData.startTime ? timeToMins(slotData.startTime) : oldStart;
+            const newEnd = slotData.endTime ? timeToMins(slotData.endTime) : oldEnd;
 
-            await fetch(`/api/slots/${updatedSlot.id}`, {
-               method: 'PUT',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify(updatedSlot)
-            });
+            // Condition: New range is strictly smaller than old range (Splitting scenario)
+            if (newStart >= oldStart && newEnd <= oldEnd && (newStart > oldStart || newEnd < oldEnd)) {
+                
+                const remainders: AvailabilitySlot[] = [];
+                // CRITICAL: When splitting, the remainders usually inherit the ORIGINAL availability (usually Available/false)
+                // If we are booking a part, the rest stays available.
+                const originalStatus = false; // Force remainders to be Available for now to solve "Both Booked" issue
+                
+                // 1. Create Head Remainder (if any)
+                if (newStart > oldStart) {
+                    remainders.push({
+                        ...existingSlot,
+                        id: generateUUID(),
+                        startTime: existingSlot.startTime, // Start at original start
+                        endTime: slotData.startTime!,      // End at new booking start
+                        isBooked: originalStatus, 
+                        interviewerId: inv!.id
+                    });
+                }
+
+                // 2. Create Tail Remainder (if any)
+                if (newEnd < oldEnd) {
+                    remainders.push({
+                        ...existingSlot,
+                        id: generateUUID(),
+                        startTime: slotData.endTime!,     // Start at new booking end
+                        endTime: existingSlot.endTime,    // End at original end
+                        isBooked: originalStatus,
+                        interviewerId: inv!.id
+                    });
+                }
+
+                // 3. Update the Main Slot to be the "edited" part (The Booked Part)
+                const updatedMainSlot = { 
+                    ...existingSlot, 
+                    ...slotData, 
+                    isBooked: !!slotData.isBooked, // Explicit boolean conversion
+                    interviewerId: inv!.id 
+                } as AvailabilitySlot;
+
+                // Optimistic Update
+                setSlots(prev => {
+                    const filtered = prev.filter(s => s.id !== slotData.id);
+                    return [...filtered, updatedMainSlot, ...remainders];
+                });
+
+                // API Calls: Update Main, Create Remainders
+                await Promise.all([
+                    fetch(`/api/slots/${updatedMainSlot.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(updatedMainSlot)
+                    }),
+                    remainders.length > 0 && fetch('/api/slots/batch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(remainders)
+                    })
+                ]);
+
+            } else {
+                // Normal Update (Full slot update or expansion)
+                const updatedSlot = { 
+                  ...existingSlot, 
+                  ...slotData, 
+                  isBooked: !!slotData.isBooked,
+                  interviewerId: inv!.id 
+                } as AvailabilitySlot;
+                
+                setSlots(prev => prev.map(s => s.id === slotData.id ? updatedSlot : s));
+
+                await fetch(`/api/slots/${updatedSlot.id}`, {
+                   method: 'PUT',
+                   headers: { 'Content-Type': 'application/json' },
+                   body: JSON.stringify(updatedSlot)
+                });
+            }
         }
       } else {
+        // New Slot
         const newSlot: AvailabilitySlot = {
-          id: crypto.randomUUID(),
+          id: generateUUID(),
           interviewerId: inv!.id,
           date: slotData.date!,
           startTime: slotData.startTime!,
           endTime: slotData.endTime!,
-          isBooked: slotData.isBooked || false
+          isBooked: !!slotData.isBooked
         };
         
         setSlots(prev => [...prev, newSlot]);
@@ -261,7 +412,6 @@ const App: React.FC = () => {
     } catch (e) {
       console.error("Save slot error", e);
       alert("儲存失敗");
-      // Only re-fetch if there was an API error to resync state
       fetchData();
     } finally {
       setIsSaving(false);
@@ -277,12 +427,6 @@ const App: React.FC = () => {
       setIsSaving(false);
       return;
     }
-
-    // Logic: 
-    // If target matches parent exactly -> Delete whole row.
-    // If target is Start part -> Update parent Start.
-    // If target is End part -> Update parent End.
-    // If target is Middle part -> Update parent End AND Create new slot.
 
     const pStart = parentSlot.startTime;
     const pEnd = parentSlot.endTime;
@@ -318,7 +462,7 @@ const App: React.FC = () => {
       const updatedPart1 = { ...parentSlot, endTime: targetStart };
       const newPart2 = {
         ...parentSlot,
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         startTime: targetEnd,
         endTime: pEnd
       };
@@ -444,8 +588,15 @@ const App: React.FC = () => {
         return;
       }
       
+      // Safety check: prevent infinite loops
+      if (startTime >= endTime) {
+        result.push(slot);
+        return;
+      }
+      
       let current = startTime;
-      while (current < endTime) {
+      let safety = 0;
+      while (current < endTime && safety < 50) {
         const next = addMinutes(current, 30);
         if (next > endTime) break;
         result.push({
@@ -456,7 +607,10 @@ const App: React.FC = () => {
           endTime: format(next, 'HH:mm'),
         });
         current = next;
+        safety++;
       }
+      
+      if (result.length === 0) result.push(slot);
     });
     return result;
   };
@@ -514,6 +668,11 @@ const App: React.FC = () => {
           </Button>
           <div className="h-8 w-[1px] bg-gray-200 mx-1 self-center hidden md:block"></div>
           
+          <Button variant="success" onClick={() => setIsBatchAddModalOpen(true)}>
+            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 14v6m-3-3h6M6 10h2a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2zm10 0h2a2 2 0 002-2V6a2 2 0 00-2-2h-2a2 2 0 00-2 2v2a2 2 0 002 2zM6 20h2a2 2 0 002-2v-2a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2z"></path></svg>
+            批量新增
+          </Button>
+
           <Button variant="success" onClick={() => { setEditingSlot(undefined); setIsEditorOpen(true); }}>
              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
              新增時段
@@ -678,6 +837,7 @@ const App: React.FC = () => {
 
       <AIInputModal isOpen={isAIModalOpen} onClose={() => setIsAIModalOpen(false)} onConfirm={handleAIScheduleConfirm} />
       <SlotEditorModal isOpen={isEditorOpen} onClose={() => { setIsEditorOpen(false); setEditingSlot(undefined); }} onSave={handleSaveSlot} onDelete={handleDeleteSlot} initialSlot={editingSlot} />
+      <BatchAddModal isOpen={isBatchAddModalOpen} onClose={() => setIsBatchAddModalOpen(false)} onConfirm={handleBatchManualConfirm} existingInterviewers={interviewers} />
       <NoteEditorModal isOpen={isNoteModalOpen} onClose={() => setIsNoteModalOpen(false)} onSave={handleSaveNote} onDelete={handleDeleteNote} date={editingNoteDate} initialNote={editingNoteDate ? dayNotes.find(n => n.date === format(editingNoteDate, 'yyyy-MM-dd')) : undefined} />
       <StatisticsModal isOpen={isStatsModalOpen} onClose={() => setIsStatsModalOpen(false)} slots={slots} interviewers={interviewers} currentDate={currentDate} />
     </div>
