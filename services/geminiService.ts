@@ -1,7 +1,5 @@
-
 import { ParsedSlot } from "../types";
 
-// This service now calls our own backend which uses DeepSeek
 export const parseSchedulingText = async (text: string): Promise<ParsedSlot[]> => {
   try {
     const response = await fetch('/api/ai-parse', {
@@ -16,13 +14,14 @@ export const parseSchedulingText = async (text: string): Promise<ParsedSlot[]> =
     });
 
     if (!response.ok) {
-      throw new Error(`Server error: ${response.statusText}`);
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.details || errorData.error || `Server error: ${response.statusText}`);
     }
 
     const data = await response.json();
     return data as ParsedSlot[];
-  } catch (error) {
+  } catch (error: any) {
     console.error("AI Parsing Error:", error);
-    throw new Error("Failed to parse scheduling text via DeepSeek.");
+    throw new Error(error.message || "Failed to parse scheduling text.");
   }
 };
