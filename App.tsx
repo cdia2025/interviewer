@@ -268,21 +268,72 @@ const App: React.FC = () => {
     }
   };
 
-  const handleDeleteSlot = async (id: string, isSplitRequest?: boolean) => {
+  const handleDeleteSlot = async (id: string, targetStart: string, targetEnd: string) => {
     setIsSaving(true);
-    // Optimistic Delete
-    setSlots(prev => prev.filter(s => s.id !== id));
     setIsEditorOpen(false);
 
-    try {
-       await fetch(`/api/slots/${id}`, { method: 'DELETE' });
-    } catch (e) {
-      console.error("Delete failed", e);
-      alert("刪除失敗");
-      fetchData(); // Sync on error
-    } finally {
+    const parentSlot = slots.find(s => s.id === id);
+    if (!parentSlot) {
       setIsSaving(false);
+      return;
     }
+
+    // Logic: 
+    // If target matches parent exactly -> Delete whole row.
+    // If target is Start part -> Update parent Start.
+    // If target is End part -> Update parent End.
+    // If target is Middle part -> Update parent End AND Create new slot.
+
+    const pStart = parentSlot.startTime;
+    const pEnd = parentSlot.endTime;
+
+    // Check if it's a full delete or fallback if args missing
+    if ((!targetStart && !targetEnd) || (targetStart === pStart && targetEnd === pEnd)) {
+      setSlots(prev => prev.filter(s => s.id !== id));
+      try {
+         await fetch(`/api/slots/${id}`, { method: 'DELETE' });
+      } catch (e) {
+        console.error("Delete failed", e);
+        fetchData();
+      }
+    } 
+    // Case: Delete Head (Trim Start)
+    else if (targetStart === pStart && targetEnd < pEnd) {
+      const updatedSlot = { ...parentSlot, startTime: targetEnd };
+      setSlots(prev => prev.map(s => s.id === id ? updatedSlot : s));
+      try {
+        await fetch(`/api/slots/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatedSlot) });
+      } catch(e) { fetchData(); }
+    }
+    // Case: Delete Tail (Trim End)
+    else if (targetEnd === pEnd && targetStart > pStart) {
+      const updatedSlot = { ...parentSlot, endTime: targetStart };
+      setSlots(prev => prev.map(s => s.id === id ? updatedSlot : s));
+      try {
+        await fetch(`/api/slots/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatedSlot) });
+      } catch(e) { fetchData(); }
+    }
+    // Case: Delete Middle (Split)
+    else if (targetStart > pStart && targetEnd < pEnd) {
+      const updatedPart1 = { ...parentSlot, endTime: targetStart };
+      const newPart2 = {
+        ...parentSlot,
+        id: crypto.randomUUID(),
+        startTime: targetEnd,
+        endTime: pEnd
+      };
+
+      setSlots(prev => prev.map(s => s.id === id ? updatedPart1 : s).concat(newPart2));
+      
+      try {
+        await Promise.all([
+          fetch(`/api/slots/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatedPart1) }),
+          fetch(`/api/slots`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newPart2) })
+        ]);
+      } catch(e) { fetchData(); }
+    }
+
+    setIsSaving(false);
   };
 
   const handleSaveNote = async (date: string, content: string, color: NoteColor = 'yellow') => {
