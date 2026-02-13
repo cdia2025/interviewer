@@ -21,7 +21,6 @@ import { AIInputModal } from './components/AIInputModal';
 import { SlotEditorModal } from './components/SlotEditorModal';
 import { NoteEditorModal } from './components/NoteEditorModal';
 import { StatisticsModal } from './components/StatisticsModal';
-import { BatchAddModal } from './components/BatchAddModal';
 import { exportToExcel } from './services/exportService';
 
 const hexToRgba = (hex: string, alpha: number) => {
@@ -56,7 +55,6 @@ const App: React.FC = () => {
   const [isAIModalOpen, setIsAIModalOpen] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
-  const [isBatchAddModalOpen, setIsBatchAddModalOpen] = useState(false);
   const [editingSlot, setEditingSlot] = useState<(AvailabilitySlot & { interviewer: Interviewer }) | undefined>();
   
   // Note Modal state
@@ -193,66 +191,6 @@ const App: React.FC = () => {
        console.error("Batch save failed", e);
        alert("批量儲存失敗");
        // Only fetch on error
-       fetchData();
-    } finally {
-       setIsSaving(false);
-    }
-  };
-
-  // New Function for Batch Manual Add
-  const handleBatchManualConfirm = async (data: { name: string; dates: string[]; timeRanges: { startTime: string; endTime: string }[] }) => {
-    setIsSaving(true);
-    let currentInterviewers = [...interviewers];
-    const trimmedName = data.name.trim();
-    
-    // 1. Find or Create Interviewer
-    let inv = currentInterviewers.find(i => i.name.toLowerCase() === trimmedName.toLowerCase());
-    let isNewInterviewer = false;
-
-    if (!inv) {
-      inv = {
-        id: crypto.randomUUID(),
-        name: trimmedName,
-        color: INTERVIEWER_COLORS[currentInterviewers.length % INTERVIEWER_COLORS.length]
-      };
-      currentInterviewers.push(inv);
-      isNewInterviewer = true;
-      await ensureInterviewerExists(inv);
-    }
-
-    // 2. Generate Slots
-    const newSlots: AvailabilitySlot[] = [];
-    data.dates.forEach(date => {
-      data.timeRanges.forEach(range => {
-        newSlots.push({
-          id: crypto.randomUUID(),
-          interviewerId: inv!.id,
-          date: date,
-          startTime: range.startTime,
-          endTime: range.endTime,
-          isBooked: false
-        });
-      });
-    });
-
-    // 3. Update State
-    setInterviewers(currentInterviewers);
-    setSlots(prev => [...prev, ...newSlots]);
-    
-    if (isNewInterviewer || !selectedInterviewerIds.has(inv.id)) {
-      setSelectedInterviewerIds(prev => new Set(prev).add(inv!.id));
-    }
-
-    // 4. API Call
-    try {
-       await fetch('/api/slots/batch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newSlots)
-       });
-    } catch (e) {
-       console.error("Batch manual save failed", e);
-       alert("批量儲存失敗");
        fetchData();
     } finally {
        setIsSaving(false);
@@ -576,11 +514,6 @@ const App: React.FC = () => {
           </Button>
           <div className="h-8 w-[1px] bg-gray-200 mx-1 self-center hidden md:block"></div>
           
-          <Button variant="success" onClick={() => setIsBatchAddModalOpen(true)}>
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 14v6m-3-3h6M6 10h2a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2zm10 0h2a2 2 0 002-2V6a2 2 0 00-2-2h-2a2 2 0 00-2 2v2a2 2 0 002 2zM6 20h2a2 2 0 002-2v-2a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2z"></path></svg>
-            批量新增
-          </Button>
-
           <Button variant="success" onClick={() => { setEditingSlot(undefined); setIsEditorOpen(true); }}>
              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
              新增時段
@@ -745,7 +678,6 @@ const App: React.FC = () => {
 
       <AIInputModal isOpen={isAIModalOpen} onClose={() => setIsAIModalOpen(false)} onConfirm={handleAIScheduleConfirm} />
       <SlotEditorModal isOpen={isEditorOpen} onClose={() => { setIsEditorOpen(false); setEditingSlot(undefined); }} onSave={handleSaveSlot} onDelete={handleDeleteSlot} initialSlot={editingSlot} />
-      <BatchAddModal isOpen={isBatchAddModalOpen} onClose={() => setIsBatchAddModalOpen(false)} onConfirm={handleBatchManualConfirm} existingInterviewers={interviewers} />
       <NoteEditorModal isOpen={isNoteModalOpen} onClose={() => setIsNoteModalOpen(false)} onSave={handleSaveNote} onDelete={handleDeleteNote} date={editingNoteDate} initialNote={editingNoteDate ? dayNotes.find(n => n.date === format(editingNoteDate, 'yyyy-MM-dd')) : undefined} />
       <StatisticsModal isOpen={isStatsModalOpen} onClose={() => setIsStatsModalOpen(false)} slots={slots} interviewers={interviewers} currentDate={currentDate} />
     </div>
