@@ -10,15 +10,25 @@ app.use(express.json());
 app.use(cors());
 
 // --- Google Sheets Setup ---
-const auth = new google.auth.GoogleAuth({
-  credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}'),
+// Modified to better support Cloud Run (ADC) and local development
+const authConfig = {
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
+};
 
+if (process.env.GOOGLE_CREDENTIALS) {
+  try {
+    authConfig.credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+  } catch (err) {
+    console.warn('Warning: GOOGLE_CREDENTIALS provided but invalid JSON. Attempting to use default credentials (ADC).');
+  }
+}
+
+const auth = new google.auth.GoogleAuth(authConfig);
 const sheets = google.sheets({ version: 'v4', auth });
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
 async function ensureTabs() {
+  if (!SPREADSHEET_ID) return;
   try {
     const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
     const titles = meta.data.sheets.map(s => s.properties.title);
@@ -36,9 +46,10 @@ async function ensureTabs() {
         spreadsheetId: SPREADSHEET_ID,
         requestBody: { requests }
       });
+      console.log('Tabs ensured/created.');
     }
   } catch (error) {
-    console.error('Error ensuring tabs:', error);
+    console.error('Error ensuring tabs. Please check Service Account permissions on the Sheet.', error.message);
   }
 }
 
@@ -80,7 +91,7 @@ async function getSheetIdByTitle(title) {
 // GET Data (Read All)
 app.get('/api/data', async (req, res) => {
   try {
-    if (!SPREADSHEET_ID) throw new Error("Missing SPREADSHEET_ID");
+    if (!SPREADSHEET_ID) throw new Error("Server Error: Missing SPREADSHEET_ID environment variable");
     
     const ranges = ['Slots!A:F', 'Interviewers!A:C', 'Notes!A:C'];
     const response = await sheets.spreadsheets.values.batchGet({
@@ -107,7 +118,8 @@ app.get('/api/data', async (req, res) => {
     res.json({ slots, interviewers, notes });
   } catch (error) {
     console.error('Sheet Read Error:', error);
-    res.status(500).json({ error: error.message, slots: [], interviewers: [], notes: [] });
+    // Return explicit error message to frontend
+    res.status(500).json({ error: error.message || "Unknown error reading Google Sheets" });
   }
 });
 

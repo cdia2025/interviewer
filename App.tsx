@@ -90,7 +90,10 @@ const App: React.FC = () => {
       else setIsLoading(true);
       
       const res = await fetch('/api/data');
-      if (!res.ok) throw new Error("Failed to fetch");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server Error: ${res.status}`);
+      }
       const data = await res.json();
       
       // Robustly map slots to ensure no undefined fields cause crashes
@@ -123,10 +126,10 @@ const App: React.FC = () => {
       if (data.interviewers && selectedInterviewerIds.size === 0) {
         setSelectedInterviewerIds(new Set(data.interviewers.map((i: Interviewer) => i.id)));
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error("Fetch Error", e);
       // Only alert if manual sync
-      if (showSyncState) alert("同步失敗，請檢查網路連線。");
+      if (showSyncState) alert(`同步失敗: ${e.message}`);
     } finally {
       setIsLoading(false);
       setIsSyncing(false);
