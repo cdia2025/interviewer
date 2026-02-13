@@ -22,8 +22,8 @@ export const AIInputModal: React.FC<AIInputModalProps> = ({ isOpen, onClose, onC
     try {
       const results = await parseSchedulingText(text);
       setParsedResults(results);
-    } catch (err) {
-      alert("Error parsing text. Please try a different format.");
+    } catch (err: any) {
+      alert(`AI 分析失敗: ${err.message}`);
     } finally {
       setIsParsing(false);
     }
