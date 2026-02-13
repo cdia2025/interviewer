@@ -57,7 +57,7 @@ const NOTE_STYLES: Record<string, string> = {
 };
 
 interface ErrorBoundaryProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }
 
 interface ErrorBoundaryState {
@@ -67,13 +67,17 @@ interface ErrorBoundaryState {
 
 // Simple Error Boundary Component
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  public state: ErrorBoundaryState;
+
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false, error: null };
   }
+
   static getDerivedStateFromError(error: Error) {
     return { hasError: true, error };
   }
+
   render() {
     if (this.state.hasError) {
       return (
@@ -139,7 +143,9 @@ const AppContent: React.FC = () => {
       }));
 
       setSlots(safeSlots);
-      setInterviewers(data.interviewers || []);
+      
+      const fetchedInterviewers = data.interviewers || [];
+      setInterviewers(fetchedInterviewers);
       
       // Sanitizing notes data
       const rawNotes = data.notes || [];
@@ -156,10 +162,25 @@ const AppContent: React.FC = () => {
       });
       setDayNotes(validNotes);
       
-      // Keep existing selection if possible, or initialize
-      if (data.interviewers && selectedInterviewerIds.size === 0) {
-        setSelectedInterviewerIds(new Set(data.interviewers.map((i: Interviewer) => i.id)));
-      }
+      // FIX: Ensure new interviewers found during sync are automatically selected
+      setSelectedInterviewerIds(prev => {
+         const newSet = new Set(prev);
+         if (newSet.size === 0) {
+            // Initial load or nothing selected: select all
+            fetchedInterviewers.forEach((i: Interviewer) => newSet.add(i.id));
+         } else {
+            // If already managing selection, check for *newly* added interviewers on server
+            // We assume if an interviewer wasn't in state before, they should be shown.
+            const existingKnownIds = interviewers.map(i => i.id);
+            fetchedInterviewers.forEach((i: Interviewer) => {
+               if (!existingKnownIds.includes(i.id)) {
+                  newSet.add(i.id);
+               }
+            });
+         }
+         return newSet;
+      });
+
     } catch (e: any) {
       console.error("Fetch Error", e);
       // Only alert if manual sync

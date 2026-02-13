@@ -97,14 +97,23 @@ app.get('/api/data', async (req, res) => {
     const response = await sheets.spreadsheets.values.batchGet({
       spreadsheetId: SPREADSHEET_ID,
       ranges,
+      // Ensure we get unformatted values to help with parsing, 
+      // but FORMATTED_VALUE (default) is usually easier for dates.
+      // We handle the boolean string parsing explicitly below.
     });
 
     const slotRows = response.data.valueRanges[0].values || [];
     const invRows = response.data.valueRanges[1].values || [];
     const noteRows = response.data.valueRanges[2].values || [];
 
+    // FIX: Handle 'TRUE', 'True', 'true' robustly
     const slots = slotRows.slice(1).map(r => ({
-      id: r[0], interviewerId: r[1], date: r[2], startTime: r[3], endTime: r[4], isBooked: r[5] === 'true'
+      id: r[0], 
+      interviewerId: r[1], 
+      date: r[2], 
+      startTime: r[3], 
+      endTime: r[4], 
+      isBooked: String(r[5]).toLowerCase() === 'true' 
     }));
 
     const interviewers = invRows.slice(1).map(r => ({
