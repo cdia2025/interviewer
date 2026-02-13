@@ -312,19 +312,11 @@ app.post('/api/interviewers', async (req, res) => {
   }
 });
 
-// --- API: Google Gemini Proxy ---
+// --- API: AI Proxy (Supports both DeepSeek & Gemini) ---
 app.post('/api/ai-parse', async (req, res) => {
   try {
     const { text, currentYear } = req.body;
     
-    // Coding Guideline: The API key must be obtained exclusively from the environment variable process.env.API_KEY.
-    const apiKey = process.env.API_KEY;
-    
-    if (!apiKey) {
-        console.error("Missing API Key");
-        return res.status(500).json({ error: "Server Error: API Key not configured" });
-    }
-
     const systemPrompt = `
       You are a specialized scheduling assistant. 
       Your Task: Extract interviewer availability from unstructured text.
@@ -337,7 +329,8 @@ app.post('/api/ai-parse', async (req, res) => {
       4. Month/Day handling: Parse "5月12日", "5/12", "May 12th".
 
       Output Format:
-      Strictly a JSON array of objects.
+      Strictly a JSON array of objects. Do not include markdown formatting.
+      Example:
       [
         { "interviewerName": "Name", "date": "YYYY-MM-DD", "startTime": "HH:mm", "endTime": "HH:mm" }
       ]
@@ -349,25 +342,62 @@ app.post('/api/ai-parse', async (req, res) => {
       4. Name Persistence: If a line starts with a name, apply it to all following times until a new name appears.
     `;
 
-    // Coding Guideline: Use @google/genai SDK
-    // Using dynamic import because server.js is CommonJS
-    const { GoogleGenAI } = await import("@google/genai");
-    const ai = new GoogleGenAI({ apiKey });
-    
-    // Coding Guideline: Use 'gemini-3-flash-preview' for basic text tasks
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: systemPrompt + "\n---\nUser Input:\n" + text,
-      config: {
-        responseMimeType: "application/json",
-        temperature: 0.1
-      }
-    });
+    // 1. Try DeepSeek (since user provided DEEPSEEK_API_KEY)
+    if (process.env.DEEPSEEK_API_KEY) {
+      console.log("Using DeepSeek API");
+      // Use native fetch (Node 18+)
+      const response = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "deepseek-chat",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: text }
+          ],
+          temperature: 0.1,
+          response_format: { type: "json_object" }
+        })
+      });
 
-    const content = response.text;
-    const parsed = JSON.parse(content);
-    
-    res.json(parsed);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`DeepSeek API Error: ${response.status} ${errorText}`);
+      }
+
+      const data = await response.json();
+      let content = data.choices[0].message.content;
+      // Clean up markdown if explicitly returned
+      content = content.replace(/```json/g, '').replace(/```/g, '').trim();
+      res.json(JSON.parse(content));
+      return;
+    }
+
+    // 2. Fallback to Gemini
+    const googleKey = process.env.API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    if (googleKey) {
+        console.log("Using Google Gemini API");
+        const { GoogleGenAI } = await import("@google/genai");
+        const ai = new GoogleGenAI({ apiKey: googleKey });
+        
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: systemPrompt + "\n---\nUser Input:\n" + text,
+          config: {
+            responseMimeType: "application/json",
+            temperature: 0.1
+          }
+        });
+
+        const parsed = JSON.parse(response.text);
+        res.json(parsed);
+        return;
+    }
+
+    throw new Error("API Key not configured. Please set DEEPSEEK_API_KEY or API_KEY (for Gemini).");
 
   } catch (error) {
     console.error('AI Error:', error.message);
