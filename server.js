@@ -1,6 +1,5 @@
 const express = require('express');
 const { google } = require('googleapis');
-const axios = require('axios');
 const path = require('path');
 const cors = require('cors');
 require('dotenv').config();
@@ -10,7 +9,6 @@ app.use(express.json());
 app.use(cors());
 
 // --- Google Sheets Setup ---
-// Modified to better support Cloud Run (ADC) and local development
 const authConfig = {
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 };
@@ -55,20 +53,16 @@ async function ensureTabs() {
 
 // --- Helper Functions ---
 
-// Find row index by ID (Column A) in a specific sheet
 async function findRowIndexById(sheetName, id) {
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: `${sheetName}!A:A`, 
   });
   const rows = response.data.values || [];
-  // Arrays are 0-indexed, Sheets rows are 1-indexed. 
-  // API responses map index 0 to Row 1.
   const index = rows.findIndex(row => row[0] === id);
-  return index; // Returns -1 if not found, or 0-based index (Row 1 = index 0)
+  return index;
 }
 
-// Find row index by Date (Column A) for Notes
 async function findRowIndexByDate(sheetName, dateStr) {
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
@@ -79,7 +73,6 @@ async function findRowIndexByDate(sheetName, dateStr) {
   return index;
 }
 
-// Get Sheet ID by Title (needed for deleteDimension)
 async function getSheetIdByTitle(title) {
   const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
   const sheet = meta.data.sheets.find(s => s.properties.title === title);
@@ -88,7 +81,6 @@ async function getSheetIdByTitle(title) {
 
 // --- API Routes ---
 
-// GET Data (Read All)
 app.get('/api/data', async (req, res) => {
   try {
     if (!SPREADSHEET_ID) throw new Error("Server Error: Missing SPREADSHEET_ID environment variable");
@@ -97,16 +89,12 @@ app.get('/api/data', async (req, res) => {
     const response = await sheets.spreadsheets.values.batchGet({
       spreadsheetId: SPREADSHEET_ID,
       ranges,
-      // Ensure we get unformatted values to help with parsing, 
-      // but FORMATTED_VALUE (default) is usually easier for dates.
-      // We handle the boolean string parsing explicitly below.
     });
 
     const slotRows = response.data.valueRanges[0].values || [];
     const invRows = response.data.valueRanges[1].values || [];
     const noteRows = response.data.valueRanges[2].values || [];
 
-    // FIX: Handle 'TRUE', 'True', 'true' robustly
     const slots = slotRows.slice(1).map(r => ({
       id: r[0], 
       interviewerId: r[1], 
@@ -127,16 +115,12 @@ app.get('/api/data', async (req, res) => {
     res.json({ slots, interviewers, notes });
   } catch (error) {
     console.error('Sheet Read Error:', error);
-    // Return explicit error message to frontend
     res.status(500).json({ error: error.message || "Unknown error reading Google Sheets" });
   }
 });
 
 // --- ATOMIC OPERATIONS ---
 
-// 1. Slots Operations
-
-// ADD Slot (Single)
 app.post('/api/slots', async (req, res) => {
   try {
     const s = req.body;
@@ -155,10 +139,9 @@ app.post('/api/slots', async (req, res) => {
   }
 });
 
-// ADD Slots (Batch)
 app.post('/api/slots/batch', async (req, res) => {
   try {
-    const slots = req.body; // Array of slots
+    const slots = req.body;
     if (!slots || slots.length === 0) return res.json({ success: true });
 
     const values = slots.map(s => [s.id, s.interviewerId, s.date, s.startTime, s.endTime, s.isBooked]);
@@ -176,7 +159,6 @@ app.post('/api/slots/batch', async (req, res) => {
   }
 });
 
-// UPDATE Slot
 app.put('/api/slots/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -184,7 +166,6 @@ app.put('/api/slots/:id', async (req, res) => {
     const rowIndex = await findRowIndexById('Slots', id);
 
     if (rowIndex === -1) {
-      // If not found, create it (fallback)
       const values = [[s.id, s.interviewerId, s.date, s.startTime, s.endTime, s.isBooked]];
       await sheets.spreadsheets.values.append({
         spreadsheetId: SPREADSHEET_ID,
@@ -193,10 +174,8 @@ app.put('/api/slots/:id', async (req, res) => {
         requestBody: { values }
       });
     } else {
-      // Update specific row (Row index 0 is A1, so rowIndex + 1)
       const range = `Slots!A${rowIndex + 1}:F${rowIndex + 1}`;
       const values = [[s.id, s.interviewerId, s.date, s.startTime, s.endTime, s.isBooked]];
-      
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
         range,
@@ -211,7 +190,6 @@ app.put('/api/slots/:id', async (req, res) => {
   }
 });
 
-// DELETE Slot
 app.delete('/api/slots/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -244,16 +222,12 @@ app.delete('/api/slots/:id', async (req, res) => {
   }
 });
 
-// 2. Notes Operations (Keyed by Date)
-
-// UPSERT Note
 app.post('/api/notes', async (req, res) => {
   try {
     const n = req.body;
     const rowIndex = await findRowIndexByDate('Notes', n.date);
 
     if (rowIndex === -1) {
-      // Create new
       const values = [[n.date, n.content, n.color]];
       await sheets.spreadsheets.values.append({
         spreadsheetId: SPREADSHEET_ID,
@@ -262,7 +236,6 @@ app.post('/api/notes', async (req, res) => {
         requestBody: { values }
       });
     } else {
-      // Update existing
       const range = `Notes!A${rowIndex + 1}:C${rowIndex + 1}`;
       const values = [[n.date, n.content, n.color]];
       await sheets.spreadsheets.values.update({
@@ -279,7 +252,6 @@ app.post('/api/notes', async (req, res) => {
   }
 });
 
-// DELETE Note
 app.delete('/api/notes/:date', async (req, res) => {
   try {
     const { date } = req.params;
@@ -310,9 +282,6 @@ app.delete('/api/notes/:date', async (req, res) => {
   }
 });
 
-// 3. Interviewers Operations
-
-// UPSERT Interviewer (If ID exists update, else add. Simplified to Add if not exists)
 app.post('/api/interviewers', async (req, res) => {
   try {
     const inv = req.body;
@@ -327,7 +296,6 @@ app.post('/api/interviewers', async (req, res) => {
          requestBody: { values }
        });
     } else {
-       // Optional: Update name/color if it changes, but for now we assume they are static or low freq
        const range = `Interviewers!A${rowIndex + 1}:C${rowIndex + 1}`;
        const values = [[inv.id, inv.name, inv.color]];
        await sheets.spreadsheets.values.update({
@@ -344,16 +312,19 @@ app.post('/api/interviewers', async (req, res) => {
   }
 });
 
-
-// API: DeepSeek Proxy
+// --- API: Google Gemini Proxy (Replaces DeepSeek) ---
 app.post('/api/ai-parse', async (req, res) => {
   try {
     const { text, currentYear } = req.body;
-    const apiKey = process.env.DEEPSEEK_API_KEY;
     
-    if (!apiKey) return res.status(500).json({ error: "DeepSeek API Key not configured" });
+    // Check API Key
+    const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    
+    if (!apiKey) {
+        console.error("Missing API Key");
+        return res.status(500).json({ error: "Server Error: API Key not configured" });
+    }
 
-    // Enhanced Prompt for complex parsing
     const systemPrompt = `
       You are a specialized scheduling assistant. 
       Your Task: Extract interviewer availability from unstructured text.
@@ -366,7 +337,7 @@ app.post('/api/ai-parse', async (req, res) => {
       4. Month/Day handling: Parse "5月12日", "5/12", "May 12th".
 
       Output Format:
-      Strictly a JSON array of objects. NO markdown formatting, NO backticks.
+      Strictly a JSON array of objects.
       [
         { "interviewerName": "Name", "date": "YYYY-MM-DD", "startTime": "HH:mm", "endTime": "HH:mm" }
       ]
@@ -376,54 +347,37 @@ app.post('/api/ai-parse', async (req, res) => {
       2. Date: Use the Current Year (${currentYear}) unless specified. Format YYYY-MM-DD.
       3. Multiple Slots: If a person has multiple times, create separate objects.
       4. Name Persistence: If a line starts with a name, apply it to all following times until a new name appears.
-      5. Do not hallucinate. If info is missing, do your best or omit.
     `;
 
-    const response = await axios.post('https://api.deepseek.com/chat/completions', {
-      model: "deepseek-chat",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: text }
-      ],
-      stream: false,
-      response_format: { type: "json_object" } 
-    }, {
-      headers: { 
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
+    // Dynamic import for CommonJS compatibility
+    const { GoogleGenAI } = await import("@google/genai");
+    const ai = new GoogleGenAI({ apiKey });
+    
+    // Use gemini-3-flash-preview for basic text tasks
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: systemPrompt + "\n---\nUser Input:\n" + text,
+      config: {
+        responseMimeType: "application/json",
+        temperature: 0.1
       }
     });
 
-    const content = response.data.choices[0].message.content;
-    const cleanJson = content.replace(/```json/g, '').replace(/```/g, '').trim();
+    const parsed = JSON.parse(response.text);
     
-    let parsed;
-    try {
-        parsed = JSON.parse(cleanJson);
-        if (!Array.isArray(parsed) && parsed.interviewers) parsed = parsed.interviewers;
-        if (!Array.isArray(parsed) && parsed.slots) parsed = parsed.slots;
-        if (!Array.isArray(parsed)) {
-            const values = Object.values(parsed);
-            const foundArray = values.find(v => Array.isArray(v));
-            parsed = foundArray || [];
-        }
-    } catch (e) {
-        console.error("JSON Parse Error", e);
-        throw e;
-    }
-
     res.json(parsed);
 
   } catch (error) {
-    console.error('DeepSeek Error:', error.response?.data || error.message);
-    res.status(500).json({ error: "AI Processing Failed" });
+    console.error('AI Error:', error.message);
+    res.status(500).json({ 
+        error: "AI Parsing Failed", 
+        details: error.message 
+    });
   }
 });
 
-// Serve static files from 'dist' (Vite build output)
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Handle React Routing (SPA fallback)
 app.get('*', (req, res) => {
   if (!req.path.startsWith('/api')) {
       res.sendFile(path.join(__dirname, 'dist', 'index.html'));
