@@ -1,3 +1,4 @@
+
 // @ts-ignore
 import XLSX from 'xlsx-js-style';
 import { AvailabilitySlot, Interviewer, DayNote } from '../types';
@@ -145,7 +146,7 @@ export const exportToExcel = (
   const headerRow = ['時間', ...monthDays.map(d => format(d, 'MM/dd'))];
   summaryData.push(headerRow);
 
-  timeSlots.forEach(time => {
+  timeSlots.forEach((time: string) => {
     const row = [time];
     monthDays.forEach(day => {
       const dateStr = format(day, 'yyyy-MM-dd');
