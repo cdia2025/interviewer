@@ -7,7 +7,7 @@ interface SlotEditorModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (slot: Partial<AvailabilitySlot>, interviewerName: string) => void;
-  onDelete?: (id: string, isSplit?: boolean) => void;
+  onDelete?: (id: string, targetStart: string, targetEnd: string) => void;
   initialSlot?: AvailabilitySlot & { interviewer: Interviewer };
 }
 
@@ -125,7 +125,13 @@ export const SlotEditorModal: React.FC<SlotEditorModalProps> = ({
 
           <div className="mt-8 flex gap-3">
             {initialSlot && onDelete && (
-              <Button type="button" variant="danger" onClick={() => onDelete(initialSlot.id, true)}>此段删除</Button>
+              <Button 
+                type="button" 
+                variant="danger" 
+                onClick={() => onDelete(initialSlot.id, initialSlot.startTime, initialSlot.endTime)}
+              >
+                此段删除
+              </Button>
             )}
             <div className="flex-1"></div>
             <Button type="button" variant="ghost" onClick={onClose}>取消</Button>
